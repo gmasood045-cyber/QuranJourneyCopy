@@ -1,7 +1,12 @@
 // خريطة رحلة القرآن — 30-station isometric Juz map (design preview).
+// Stations come from the shared preview memorisation records (../progress), the
+// same source as the Achievement Library, so both always agree. Reading or
+// revision never lights a station; only confirmed memorisation does.
 import { useState } from 'react'
-import { Chrome, Demo, Head, Icon, toAr, useDevice, useProto } from '../core'
-import { JUZ_AR, JUZ_INFO, TOTAL_MEMORISED, type JuzInfo } from '../data'
+import { Chrome, Head, Icon, toAr, useDevice, useProto } from '../core'
+import { JUZ_AR } from '../data'
+import { derived, usePreview, type JuzInfo } from '../progress'
+import { DataBar } from '../previewUi'
 import { Box, C, GlowDefs, S, STATUS_COLOR, SURFACE, kernel, tint } from '../iso'
 import { TOTAL_AYAT, surah } from '../../../lib/quran'
 
@@ -10,7 +15,10 @@ const pct = (j: JuzInfo) => Math.floor((j.memorised / j.total) * 100)
 
 export function JourneyMap() {
   const device = useDevice()
-  const [sel, setSel] = useState<number>(JUZ_INFO.find((j) => j.status === 'progress')?.j ?? 1)
+  const d = derived(usePreview())
+  const JUZ_INFO = d.juz
+  const TOTAL_MEMORISED = d.memCount
+  const [sel, setSel] = useState<number>(() => JUZ_INFO.find((j) => j.status === 'progress')?.j ?? 1)
   const j = JUZ_INFO[sel - 1]
   const done = JUZ_INFO.filter((x) => x.status === 'done').length
   const prog = JUZ_INFO.filter((x) => x.status === 'progress').length
@@ -30,10 +38,10 @@ export function JourneyMap() {
       <Chrome>
         <div className="flex h-full">
           <div className="no-scrollbar min-w-0 flex-1 overflow-y-auto px-10 py-9">
-            <Head title="خريطة رحلة القرآن" sub="ثلاثون محطة، لكلّ جزء محطة. تُضاء المحطة من سجلّ الآيات التي حفظتها فعلًا." action={<Demo />} />
+            <Head title="خريطة رحلة القرآن" sub="ثلاثون محطة، لكلّ جزء محطة. تُضاء المحطة من سجلّ الآيات التي حفظتها فعلًا." action={<DataBar />} />
             {summary}
             <Legend />
-            <MapSvg cols={5} width={760} sel={sel} onSel={setSel} />
+            <MapSvg juz={JUZ_INFO} cols={5} width={760} sel={sel} onSel={setSel} />
           </div>
           <aside className="w-[360px] shrink-0 border-s border-line/60 bg-card/50 p-6">
             <JuzDetail j={j} />
@@ -44,10 +52,10 @@ export function JourneyMap() {
   return (
     <Chrome>
       <div className="px-5 pb-56 pt-4">
-        <Head title="خريطة رحلة القرآن" sub="ثلاثون محطة تُضاء بما تحفظه فعلًا." action={<Demo />} />
+        <Head title="خريطة رحلة القرآن" sub="ثلاثون محطة تُضاء بما تحفظه فعلًا." action={<DataBar compact />} />
         {summary}
         <Legend />
-        <MapSvg cols={3} width={350} sel={sel} onSel={setSel} />
+        <MapSvg juz={JUZ_INFO} cols={3} width={350} sel={sel} onSel={setSel} />
       </div>
       <div className="glass-panel absolute inset-x-3 bottom-28 z-30 rounded-[26px] p-4">
         <JuzDetail j={j} compact />
@@ -66,7 +74,7 @@ function Legend() {
   )
 }
 
-function MapSvg({ cols, width, sel, onSel }: { cols: number; width: number; sel: number; onSel: (j: number) => void }) {
+function MapSvg({ juz: JUZ_INFO, cols, width, sel, onSel }: { juz: JuzInfo[]; cols: number; width: number; sel: number; onSel: (j: number) => void }) {
   const rows = Math.ceil(30 / cols)
   const gapX = (width - 90) / (cols - 1)
   const gapY = cols === 3 ? 96 : 104
@@ -145,7 +153,7 @@ export function JuzDetail({ j, compact = false }: { j: JuzInfo; compact?: boolea
         <p className="text-[15px] font-bold">{toAr(p)}٪</p>
       </div>
       <span className="mt-2 block h-2 overflow-hidden rounded-full bg-night/10"><span className="block h-full rounded-full" style={{ width: `${(j.memorised / j.total) * 100}%`, background: STATUS_COLOR[j.status === 'idle' ? 'progress' : j.status] }} /></span>
-      <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted"><Demo />محسوبة من سجلّ آيات تجريبي</p>
+      <p className="mt-1.5 text-[11px] text-muted">من سجلّ الحفظ المؤكَّد في المعاينة · القراءة والمراجعة لا تُضيئان المحطة</p>
       {!compact && (
         <div className="mt-5">
           <p className="mb-2 text-[12.5px] font-semibold text-muted">السور في هذا الجزء</p>
@@ -157,7 +165,7 @@ export function JuzDetail({ j, compact = false }: { j: JuzInfo; compact?: boolea
       )}
       <div className={`grid grid-cols-2 gap-2 ${compact ? 'mt-3' : 'mt-6'}`}>
         <button type="button" onClick={() => go('ayah')} disabled={j.status === 'done'} className="press flex h-11 items-center justify-center gap-1.5 rounded-full bg-night text-[13.5px] font-semibold text-parchment disabled:opacity-40"><Icon name="sprout" size={17} />احفظ</button>
-        <button type="button" onClick={() => go('week')} disabled={j.memorised === 0} className="press flex h-11 items-center justify-center gap-1.5 rounded-full bg-gold-soft text-[13.5px] font-semibold disabled:opacity-40"><Icon name="repeat" size={17} />راجع</button>
+        <button type="button" onClick={() => go('revision')} disabled={j.memorised === 0} className="press flex h-11 items-center justify-center gap-1.5 rounded-full bg-gold-soft text-[13.5px] font-semibold disabled:opacity-40"><Icon name="repeat" size={17} />راجع</button>
       </div>
     </div>
   )

@@ -8,7 +8,7 @@ export function Icon({ name, size = 22, className = '', fill = false }: { name: 
   return <I n={name} s={size} className={className} fill={fill} />
 }
 
-export type ScreenId = 'home' | 'mushaf' | 'ayah' | 'similar' | 'recite' | 'map' | 'library' | 'rewards' | 'kids' | 'week' | 'azkar' | 'azkar-list'
+export type ScreenId = 'home' | 'mushaf' | 'ayah' | 'similar' | 'plans' | 'revision' | 'recite' | 'map' | 'library' | 'rewards' | 'kids' | 'week' | 'azkar' | 'azkar-list'
 export type Device = 'mobile' | 'desktop'
 export type Nav = { screen: ScreenId; param?: string }
 
@@ -106,11 +106,13 @@ export const NAV: { id: ScreenId; icon: string; ar: string; dock?: boolean }[] =
   { id: 'mushaf', icon: 'book', ar: 'المصحف', dock: true },
   { id: 'ayah', icon: 'sparkle', ar: 'رحلة الحفظ', dock: true },
   { id: 'azkar', icon: 'sun', ar: 'أذكاري', dock: true },
+  { id: 'plans', icon: 'target', ar: 'خططي' },
+  { id: 'week', icon: 'calendar', ar: 'خطة الأسبوع' },
+  { id: 'revision', icon: 'repeat', ar: 'المراجعة' },
   { id: 'recite', icon: 'mic', ar: 'التلاوة والتجويد' },
   { id: 'rewards', icon: 'gift', ar: 'المكافآت والإنجازات' },
   { id: 'library', icon: 'layers', ar: 'مكتبة إنجازاتي' },
   { id: 'map', icon: 'path', ar: 'خريطة الرحلة' },
-  { id: 'week', icon: 'calendar', ar: 'خطة الأسبوع' },
   { id: 'kids', icon: 'letters', ar: 'عالم الأطفال' },
 ]
 
@@ -154,7 +156,7 @@ export function Chrome({ children, bare = false, dock = true }: { children: Reac
                 </button>
               )
             })}
-            <button type="button" onClick={() => go('recite')} aria-label="المزيد" className={`press flex h-12 w-12 items-center justify-center rounded-full ${NAV.some((n) => !n.dock && n.id === active(nav.screen)) ? 'bg-night text-parchment' : 'text-muted hover:text-night'}`}>
+            <button type="button" onClick={() => go('plans')} aria-label="المزيد" className={`press flex h-12 w-12 items-center justify-center rounded-full ${NAV.some((n) => !n.dock && n.id === active(nav.screen)) ? 'bg-night text-parchment' : 'text-muted hover:text-night'}`}>
               <Icon name="more" size={21} />
             </button>
           </div>

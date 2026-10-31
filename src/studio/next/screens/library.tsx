@@ -1,7 +1,10 @@
 // مكتبة إنجازاتي — isometric achievements library (design preview).
+// Books come from the same shared memorisation records as the Journey Map.
 import { useState, type ReactElement } from 'react'
-import { Chrome, Demo, Head, MoreTabs, toAr, useDevice } from '../core'
-import { JUZ_AR, JUZ_INFO, memorisedBetween, type JuzInfo } from '../data'
+import { Chrome, Head, Icon, MoreTabs, toAr, useDevice, useProto } from '../core'
+import { JUZ_AR } from '../data'
+import { derived, usePreview, type JuzInfo } from '../progress'
+import { DataBar } from '../previewUi'
 import { Box, GlowDefs, STATUS_COLOR, SURFACE, kernel, tint } from '../iso'
 import { gIndex, surah } from '../../../lib/quran'
 
@@ -16,6 +19,8 @@ const H = ROW * 3 + 8
 
 export function Library() {
   const device = useDevice()
+  const d = derived(usePreview())
+  const JUZ_INFO = d.juz
   const [sel, setSel] = useState(30)
   const j = JUZ_INFO[sel - 1]
   const done = JUZ_INFO.filter((x) => x.status === 'done').length
@@ -26,7 +31,7 @@ export function Library() {
       <span className="rounded-full bg-leaf/10 px-3 py-1.5 font-semibold text-leaf">{toAr(done)} كتب مكتملة</span>
       <span className="rounded-full bg-gold-soft px-3 py-1.5 font-semibold">{toAr(prog)} قيد الحفظ</span>
       <span className="rounded-full bg-night/[.05] px-3 py-1.5 text-muted">{toAr(30 - done - prog)} تنتظر</span>
-      <Demo />
+      <DataBar compact />
     </div>
   )
   const body =
@@ -35,23 +40,23 @@ export function Library() {
         <div className="no-scrollbar min-w-0 flex-1 overflow-y-auto px-10 py-9">
           <Head title="مكتبة إنجازاتي" sub={intro} />
           {stats}
-          <Case sel={sel} onSel={setSel} />
+          <Case juz={JUZ_INFO} sel={sel} onSel={setSel} />
         </div>
-        <aside className="no-scrollbar w-[360px] shrink-0 overflow-y-auto border-s border-line/60 bg-card/50 p-6"><BookDetail j={j} /></aside>
+        <aside className="no-scrollbar w-[360px] shrink-0 overflow-y-auto border-s border-line/60 bg-card/50 p-6"><BookDetail j={j} memBetween={d.memBetween} /></aside>
       </div>
     ) : (
       <div className="px-5 pb-8 pt-4">
         <MoreTabs />
         <Head title="مكتبة إنجازاتي" sub={intro} />
         {stats}
-        <Case sel={sel} onSel={setSel} />
-        <div className="mt-4 rounded-[26px] bg-card p-5 ring-1 ring-line"><BookDetail j={j} /></div>
+        <Case juz={JUZ_INFO} sel={sel} onSel={setSel} />
+        <div className="mt-4 rounded-[26px] bg-card p-5 ring-1 ring-line"><BookDetail j={j} memBetween={d.memBetween} /></div>
       </div>
     )
   return <Chrome>{body}</Chrome>
 }
 
-function Case({ sel, onSel }: { sel: number; onSel: (j: number) => void }) {
+function Case({ juz: JUZ_INFO, sel, onSel }: { juz: JuzInfo[]; sel: number; onSel: (j: number) => void }) {
   const k = kernel(72, H + 26)
   const [fx, fy] = k.P(W / 2, D / 2, 0)
   const recess = 'color-mix(in oklab, var(--color-card) 72%, var(--color-night))'
@@ -116,7 +121,8 @@ function Book({ k, j, x, z, on, onSel }: { k: ReturnType<typeof kernel>; j: JuzI
   )
 }
 
-function BookDetail({ j }: { j: JuzInfo }) {
+function BookDetail({ j, memBetween: memorisedBetween }: { j: JuzInfo; memBetween: (a: number, b: number) => number }) {
+  const { go } = useProto()
   const g0 = gIndex(...j.start)
   const g1 = gIndex(...j.end)
   return (
@@ -146,7 +152,11 @@ function BookDetail({ j }: { j: JuzInfo }) {
         })}
       </ul>
       {j.surahs.length > 14 && <p className="mt-2 text-[12px] text-muted">و{toAr(j.surahs.length - 14)} سورة أخرى</p>}
-      <p className="mt-4 flex items-center gap-1.5 text-[11px] text-muted"><Demo />سجلّ حفظ تجريبي</p>
+      <div className="mt-5 grid grid-cols-2 gap-2">
+        <button type="button" onClick={() => go('map')} className="press flex h-10 items-center justify-center gap-1.5 rounded-full bg-night/[.05] text-[12.5px] font-semibold"><Icon name="path" size={15} />على الخريطة</button>
+        <button type="button" onClick={() => go('rewards')} className="press flex h-10 items-center justify-center gap-1.5 rounded-full bg-night/[.05] text-[12.5px] font-semibold"><Icon name="star" size={15} />الإنجازات</button>
+      </div>
+      <p className="mt-3 text-[11px] text-muted">من سجلّ الحفظ المؤكَّد في المعاينة · نفس مصدر خريطة الرحلة</p>
     </div>
   )
 }

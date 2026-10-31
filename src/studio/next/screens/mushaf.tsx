@@ -10,6 +10,8 @@ import { MobileReader, type MobileView } from '../../mushaf/mobile'
 import { navTo, type Focus, type Go, type MushafNav } from '../../mushaf/page'
 import { Chrome, Icon, toAr, useDevice, useProto } from '../core'
 import { useSession } from '../session'
+import { setActiveTask, useActiveTask } from '../taskNav'
+import { actions, rangeAr, usePreview } from '../progress'
 import { surah } from '../../../lib/quran'
 import { setReciteTarget } from './recite'
 import { MushafIndex } from './mushafIndex'
@@ -42,7 +44,7 @@ export function DigitalMushaf() {
   const open = (pg: number, focus?: Focus) => set({ nav: navTo(pg, focus), stage: 'reader', view: 'reading' })
   const recite = (rs: number, ra: number) => (setReciteTarget({ s: rs, a: ra }), goScreen('recite'))
 
-  const ret = <ReturnToJourney />
+  const ret = <><ReturnToJourney /><ReadingTaskBar /></>
 
   if (s.stage === 'index') return <div className="relative h-full"><MushafIndex pg={s.nav.pg} onOpen={open} />{ret}</div>
 
@@ -60,6 +62,25 @@ export function DigitalMushaf() {
     <div className="mp absolute inset-0" data-tone={s.tone}>
       <MobileReader bare auto label="" pg={s.nav.pg} focus={s.nav.focus} view={s.view} tone={s.tone} setTone={setTone} onView={(view) => set({ view })} onGo={go} onBack={back} onRecite={recite} />
       {ret}
+    </div>
+  )
+}
+
+/** Opened from a reading / khatmah task: the explicit way to record it, and back to the roadmap. */
+function ReadingTaskBar() {
+  const t = useActiveTask()
+  const st = usePreview()
+  const { go } = useProto()
+  if (!t || t.activity !== 'reading') return null
+  const done = st.tasks.some((x) => x.id === `${t.planId}:${t.date}`)
+  const complete = () => actions.completeTask(t.planId, t.date)
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-40 z-[66] flex justify-center px-4">
+      <div className="glass-panel pointer-events-auto flex max-w-[460px] flex-wrap items-center gap-2 rounded-[22px] px-3.5 py-2.5 text-[12.5px]" data-reading-task>
+        <span className="min-w-0 flex-1"><b className="font-semibold">{t.name}</b> · ورد {rangeAr(t.unit, t.from, t.to)}</span>
+        {done ? <span className="rounded-full bg-leaf/12 px-3 py-1.5 font-semibold text-leaf">سُجّلت القراءة</span> : <button type="button" onClick={complete} className="press h-8 rounded-full bg-night px-3 font-semibold text-parchment" data-complete-reading>أتممت الورد</button>}
+        <button type="button" onClick={() => (setActiveTask(null), go('week'))} className="press h-8 rounded-full px-3 ring-1 ring-line">خريطة الأسبوع</button>
+      </div>
     </div>
   )
 }

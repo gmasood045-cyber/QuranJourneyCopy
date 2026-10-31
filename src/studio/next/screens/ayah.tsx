@@ -9,6 +9,10 @@ import { RECITERS, SURAHS, ayahAudioUrl, firstLetter, hizbOf, juzOf, loadMushaf,
 import { TAFSIRS, loadTafsir, type TafsirText } from '../../../lib/tafsir'
 import { DEMO_PASSAGE, MAX_PASSAGE, akey, isDemoPassage, pairsForPassage, passageAyat, useSession, validatePassage, type MemResult, type PanelId, type Passage } from '../session'
 import { RevisionRecall, SimilarPanel } from './similarPanel'
+import { actions as progress, derived, rangeAr, usePreview } from '../progress'
+import { setActiveTask, useActiveTask } from '../taskNav'
+import { Confirm } from '../previewUi'
+import { gIndex } from '../../../lib/quran'
 
 type Panel = PanelId
 const pkeyOf = (p: Passage) => `${p.s}:${p.from}-${p.to}`
@@ -132,6 +136,7 @@ export function AyahJourney() {
   }, [cur, text.status]) // eslint-disable-line react-hooks/exhaustive-deps
   const pick = (a: number) => (ses.setCur(a), jump(a, true))
 
+  const pv = derived(usePreview())
   const linked = pairsForPassage(p, ses.s.pairs)
   const panels: { id: Panel; ar: string; short: string; icon: string }[] = [
     { id: 'read', ar: 'اقرأ واستمع', short: 'اقرأ واستمع', icon: 'volume' },
@@ -150,7 +155,7 @@ export function AyahJourney() {
     ) : id === 'understand' ? (
       <UnderstandPanel key={`${pkey}:${cur}`} p={p} a={cur} text={curText} note={ses.s.notes[akey(p.s, cur)] ?? ''} onSave={(t) => ses.setNote(cur, t)} />
     ) : id === 'memorize' ? (
-      <MemorizePanel key={`${pkey}:${cur}`} a={cur} text={curText} hafs={text.hafs} audio={audio} onResult={(r) => ses.setMem(cur, r)} result={ses.s.mem[akey(p.s, cur)]} />
+      <MemorizePanel key={`${pkey}:${cur}`} a={cur} text={curText} hafs={text.hafs} audio={audio} onResult={(r) => (ses.setMem(cur, r), r === 'mastered' && progress.confirmMemorized(p.s, cur))} result={ses.s.mem[akey(p.s, cur)]} />
     ) : id === 'connect' ? (
       <ConnectPanel key={nonce} p={p} ayat={text.ayat} hafs={text.hafs} />
     ) : (
@@ -171,7 +176,7 @@ export function AyahJourney() {
     text.ayat.map((t, i) => {
       const a = p.from + i
       const k = akey(p.s, a)
-      const r = ses.s.mem[k]
+      const r = ses.s.mem[k] ?? (pv.mem[gIndex(p.s, a)] ? 'mastered' : undefined)
       const sims = linked.filter((x) => x.mine.a === a).length
       return (
         <section key={`${pkey}:${a}`} data-a={a} className={slideCls} aria-label={`الآية ${a}`}>
@@ -236,6 +241,7 @@ export function AyahJourney() {
               </div>
               {intentSwitch}
             </div>
+            <HifzTaskBanner />
             <div className="relative min-h-0 flex-1">
               <div ref={feed} className="no-scrollbar h-full snap-y snap-mandatory overflow-y-auto" data-feed>{slides}</div>
               {ready && <Dots p={p} cur={cur} onPick={pick} />}
@@ -273,6 +279,7 @@ export function AyahJourney() {
             <span className="w-10" />
           </div>
           {intentSwitch}
+          <HifzTaskBanner compact />
         </div>
         {ready && <Dots p={p} cur={cur} onPick={pick} />}
         {/* Action rail */}
@@ -310,6 +317,35 @@ export function AyahJourney() {
         {pickerEl}
       </div>
     </Chrome>
+  )
+}
+
+/** When the journey was opened from a memorisation task: progress on it and the explicit, confirmed completion. */
+function HifzTaskBanner({ compact = false }: { compact?: boolean }) {
+  const t = useActiveTask()
+  const st = usePreview()
+  const [ask, setAsk] = useState(false)
+  const [sure, setSure] = useState(false)
+  if (!t || t.activity !== 'hifz') return null
+  const d = derived(st)
+  const total = t.to - t.from + 1
+  const mastered = d.memBetween(t.from, t.to)
+  const done = st.tasks.some((x) => x.id === `${t.planId}:${t.date}`)
+  return (
+    <div className={`flex flex-wrap items-center gap-2 bg-gold-soft/50 text-[12px] ${compact ? 'w-full rounded-[16px] px-3 py-2' : 'border-b border-line/60 px-8 py-2.5'}`} data-hifz-task>
+      <span className="min-w-0 flex-1"><b className="font-semibold">مهمة: {t.name}</b> · {rangeAr('ayah', t.from, t.to)} · محفوظة {toAr(mastered)}/{toAr(total)}</span>
+      {done ? <span className="rounded-full bg-leaf/12 px-2.5 py-1 font-semibold text-leaf">سُجّلت المهمة</span> : <button type="button" onClick={() => setAsk(true)} className="press h-8 rounded-full bg-night px-3 font-semibold text-parchment" data-complete-hifz>سجّل الإتمام</button>}
+      {!compact && <button type="button" onClick={() => setActiveTask(null)} aria-label="إخفاء المهمة" className="press h-8 w-8 rounded-full hover:bg-night/[.06]"><Icon name="x" size={14} className="mx-auto" /></button>}
+      {ask && (
+        <Confirm
+          title="تأكيد إتمام مهمة الحفظ"
+          body={<><p>تُسجَّل آيات المهمة ({toAr(total)}) محفوظة فقط إذا أتقنتها فعلًا.</p><label className="mt-3 flex items-center gap-2 text-night"><input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} className="h-4 w-4 accent-[var(--color-gold)]" />أؤكّد أنني أتقنت حفظها</label></>}
+          confirm="سجّل الحفظ"
+          onCancel={() => (setAsk(false), setSure(false))}
+          onConfirm={() => sure && (progress.completeTask(t.planId, t.date, { confirmedMemorised: true }), setAsk(false), setSure(false))}
+        />
+      )}
+    </div>
   )
 }
 

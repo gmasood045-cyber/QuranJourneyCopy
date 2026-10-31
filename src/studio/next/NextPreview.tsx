@@ -14,6 +14,9 @@ import { WeekRoadmap } from './screens/week'
 import { ReciteJourney } from './screens/recite'
 import { Similarities } from './screens/similar'
 import { Rewards } from './screens/rewards'
+import { PlansScreen } from './screens/plans'
+import { RevisionScreen } from './screens/revision'
+import { STORAGE_KEY, actions as progressActions, isDemoData, usePreview } from './progress'
 import { AzkarHome, AzkarList } from './screens/azkar'
 import { DigitalMushaf, MUSHAF_DEFAULT, MushafCtx, type MushafState } from './screens/mushaf'
 import { PageSelector } from '../mushaf/nav'
@@ -25,16 +28,18 @@ import { SessionCtx, readOnlySession, useSessionState } from './session'
 
 type Page = ScreenId | 'themes' | 'system'
 const PAGES: { id: Page; n: string; en: string; ar: string; note: string }[] = [
-  { id: 'home', n: '01', en: 'Unified home', ar: 'رحلتك اليوم', note: 'Three daily journeys (Quran · Azkar by local time · Tadabbur) as one calm trio, then at most four cards: today’s plan tasks, Azkar, an ayah to reflect on (real text, chosen by date) and recent achievements. Rings are computed from the demo plan log, not typed percentages.' },
+  { id: 'home', n: '01', en: 'Unified home', ar: 'رحلتك اليوم', note: 'Unified home over the shared preview store: today’s tasks generated from your plans (start opens the right destination), recent achievements with their dates, last recorded reading. Azkar and the reflection ayah are unchanged.' },
   { id: 'mushaf', n: '02', en: 'Digital Mushaf', ar: 'المصحف الرقمي', note: 'Opens on a surah / juz index: 114 surah cards (Arabic and English name, meaning, ayah count, Makki/Madani, starting page) and 30 juz with their real start and end, sortable and searchable in Arabic or English. A card opens the approved Phase 1 reader at that exact ayah; its back button returns here. All 604 pages are navigable. Pages are text-rendered — verified KFGQPC Hafs text on Tanzil’s Madinah page ranges, not page images, so lines reflow. Surah names use Amiri (no licensed surah-name font in the project); no revelation-order tab, as the repo has no sourced data for it.' },
   { id: 'ayah', n: '03', en: 'Memorization Journey', ar: 'رحلة الحفظ', note: 'Passage-driven: “اختيار مقطع الحفظ” picks any surah and range (validated against the surah’s real ayah count, up to 20 ayat); Al-Mulk 1–5 is only the initial DEMO passage. Vertical snap feed of the exact Hafs text with explicit loading / error / retry, EveryAyah audio. Five connected experiences: Read & listen, Understand & reflect (verbatim Tafsir with book and author, separate from the personal journal), Memorise (6 steps; only “أتقنتها” records an ayah as memorised), Connect ayat, and “متشابهات هذا المقطع” — the primary home of Quranic Similarities, contextual to the active passage and current ayah, with its own “التمييز بين المتشابهات” progress that never counts as memorisation. One shared session drives Desktop, Mobile and Both (passage, current ayah, results, reflections, bookmarks, linked similarities); it lives in preview memory only.' },
   { id: 'similar', n: '04', en: 'Similarities · extended text search', ar: 'البحث النصي الموسّع', note: 'Secondary reference view, opened from “متشابهات هذا المقطع” inside the Memorization Journey (no longer a navigation destination). It receives the active passage and its linked pairs, and its back button returns to the same passage and ayah. Textual similarity and thematic connections are separate lenses. No verified similarity dataset is bundled, so the curated list and the thematic lens show labelled empty states (0 pairs) and no invented examples. What works: a whole-Quran word search over the exact KFGQPC Hafs text (anywhere / beginning / ending, matched on the consonantal skeleton), side-by-side comparison with the differing words highlighted and a mechanical explanation, “open in Mushaf” for either verse, linking a pair to your memorisation (session only), a fill-the-different-word practice and a which-surah connection drill — both built only from pairs you linked to the passage. Everything here is labelled automatic textual matching, never verified mutashabihat; the full text loads only on the first explicit search, with retry on failure.' },
   { id: 'recite', n: '05', en: 'Recitation Correction & Tajweed', ar: 'تصحيح التلاوة والتجويد', note: 'Replaces the Recitation Journey mock with a guided flow: choose a surah and up to 10 ayat, read the exact text and listen to the reference reciter (EveryAyah), record with real microphone permission (lib/audio, same as the app), then analyse. Analysis runs only when the Muaalem engine reports online; otherwise the attempt is explicitly “not analysed”. The result layout (correct · needs practice · articulation · tajweed · repetition) renders only real engine fields, or an empty labelled template. Session history keeps automated and (optional, prototype) teacher review visually distinct.' },
-  { id: 'rewards', n: '06', en: 'Rewards & Achievements', ar: 'المكافآت والإنجازات', note: 'Adult and children’s modes (the children’s mode uses the Kids tokens). Every badge is computed from the DEMO records with the stated rules: only confirmed mastered memorisation counts as memorisation; revision badges need completed revision tasks; reading, listening, Tafsir and reflection never count as memorisation (try it in “كيف تُحتسب المكافآت”); nothing is deducted, no streak penalties, no leaderboards. The Juz shelf stays in the Achievements Library; the children’s stars come from completed Kids lessons.' },
-  { id: 'library', n: '07', en: 'Achievements Library', ar: 'مكتبة إنجازاتي', note: 'Isometric bookcase, six shelves × five Juz books. A book lights fully only when every ayah is recorded; in-progress spines fill to the true ratio; untouched books are ghost outlines that “appear” as you begin. No streaks, ranks or comparisons.' },
-  { id: 'kids', n: '08', en: 'Kids Learning House', ar: 'عالم الأطفال', note: 'Open-top isometric house with five rooms whose furniture tells the lesson (board of letters, harakat poster, joining blocks, reading corner, rahl + lantern). Rendered with the production Kids tokens (data-kids, kid-1…5). Rooms open the existing lessons in Kids.tsx; inventories come from kidsData.ts.' },
-  { id: 'week', n: '09', en: 'Weekly Roadmap', ar: 'خريطة خطط الأسبوع', note: 'Seven day-stations over the existing plan model (kind, study weekdays, daily units). Task tiles on each plinth light when complete. A weekday with no study day in any plan is a rest day: sky-toned, crescent, never shown as missed.' },
-  { id: 'map', n: '10', en: 'Quran Journey Map', ar: 'خريطة رحلة القرآن', note: '30 isometric stations on a serpentine road (RTL: starts top-right). Plinth height + glow encode state: leaf = complete, gold = in progress (front strip = real ratio), neutral = not started. Station detail: real Juz range, memorised/total and % computed from demo ayah records.' },
+  { id: 'rewards', n: '06', en: 'Rewards & Achievements', ar: 'المكافآت والإنجازات', note: 'Adult achievements are rules evaluated on the shared preview records (memorisation, juz, revision, consistency, plans); each is stored once with its date and triggering event and never removed. Only confirmed memorisation counts as memorisation; revision and reading are separate; active days are a total, not a streak. Kids: stars = one per completed lesson record, badges stored once with dates, stickers and optional decor (persisted). Demo-seed items are labelled تجريبي.' },
+  { id: 'plans', n: '06a', en: 'Plans', ar: 'خططي', note: 'Create, view, edit, pause / resume, set primary, complete, archive and delete plans (memorisation, revision, reading, khatmah, custom) over the whole Quran, a surah range, a juz, an ayah range or a page range. The guided form validates the range against real surah / juz / page bounds and shows a live summary and the estimated weekly schedule from the same task generator the roadmap uses. Data lives in the shared preview store (localStorage key quranJourney.nextPreview.v1), never the app’s plans.' },
+  { id: 'revision', n: '06b', en: 'Revision', ar: 'المراجعة', note: 'Destination of revision tasks: the exact verses of the task (verbatim Hafs), recite-from-memory toggle and self-check, then an explicit «أتممت المراجعة». Revision is recorded separately and never increases memorised ayat.' },
+  { id: 'library', n: '07', en: 'Achievements Library', ar: 'مكتبة إنجازاتي', note: 'Isometric bookcase, six shelves × five Juz books, from the same shared memorisation records as the Journey Map (so both always agree). A book lights fully only when every ayah is confirmed memorised; in-progress spines fill to the true ratio; reading or revision never fill a book.' },
+  { id: 'kids', n: '08', en: 'Kids Learning House', ar: 'عالم الأطفال', note: 'Open-top isometric house with five rooms. Every lesson has a stable id and is played inside the preview (letter and harakah quizzes, joining builder, reading cards, parent-confirmed short surahs); a lesson is recorded once and earns exactly one star, however often the answer is pressed. The unlocked decoration tints the garden and persists.' },
+  { id: 'week', n: '09', en: 'Weekly Roadmap', ar: 'خريطة خطط الأسبوع', note: 'Seven day-stations generated from the shared preview plans: each active plan’s study days, daily target and real cursor. Weekly completion %, paused / completed plans, the primary plan. Open a day, start a task (memorisation → journey, revision → revision screen, reading / khatmah → the exact Mushaf page), record it explicitly, undo the latest, view details. A day with no task is a rest day; an unrecorded earlier day is never “missed”.' },
+  { id: 'map', n: '10', en: 'Quran Journey Map', ar: 'خريطة رحلة القرآن', note: '30 isometric stations on a serpentine road (RTL: starts top-right), from the shared confirmed-memorisation records: leaf = complete, gold = in progress (front strip = real ratio), neutral = not started. Reading never lights a station.' },
   { id: 'azkar', n: '11', en: 'Azkari', ar: 'أذكاري', note: 'Six category groups; the hero card picks morning or evening from the device clock. Text, counts, references and grades are placeholders until a verified corpus is added.' },
   { id: 'azkar-list', n: '12', en: 'Individual Azkar', ar: 'بطاقات الأذكار', note: 'Card anatomy: text, verified count, large thumb-reach counter with remaining repetitions, source, grade, favourite and completion. Counts shown are labelled demo numbers so the counter can be tried.' },
   { id: 'themes', n: '13', en: 'Theme variations', ar: 'تنويعات المظهر', note: 'The same screens under every production palette in light and dark. Each frame carries data-palette / data-theme exactly as <html> does in the app.' },
@@ -50,6 +55,8 @@ const SCREENS: Record<ScreenId, () => ReactNode> = {
   kids: () => <KidsHouse />,
   week: () => <WeekRoadmap />,
   recite: () => <ReciteJourney />,
+  plans: () => <PlansScreen />,
+  revision: () => <RevisionScreen />,
   similar: () => <Similarities />,
   rewards: () => <Rewards />,
   azkar: () => <AzkarHome />,
@@ -68,7 +75,7 @@ function Frame({ nav, go, device, look }: { nav: Nav; go: (s: ScreenId, p?: stri
       <div className="flex h-6 items-center gap-1.5 px-2" aria-hidden><span className="h-2.5 w-2.5 rounded-full bg-white/20" /><span className="h-2.5 w-2.5 rounded-full bg-white/20" /><span className="h-2.5 w-2.5 rounded-full bg-white/20" /></div>
       <div className="overflow-hidden rounded-[12px]">
         <Fit w={1280} h={820}>
-          <Themed look={look} kids={kids} className="h-[820px] w-[1280px] overflow-hidden">{body}</Themed>
+          <Themed look={look} kids={kids} className="relative h-[820px] w-[1280px] overflow-hidden">{body}</Themed>
         </Fit>
       </div>
     </div>
@@ -137,6 +144,7 @@ export default function NextPreview() {
             </label>
             <Seg v={mode} set={setMode} opts={[['light', 'Light'], ['dark', 'Dark'], ['system', 'System']]} />
             <Seg v={device} set={setDevice} opts={[['both', 'Both'], ['desktop', 'Desktop'], ['mobile', 'Mobile']]} />
+            <PreviewDataControl />
           </div>
         </div>
       </header>
@@ -184,6 +192,21 @@ export default function NextPreview() {
     </div>
     </MushafCtx.Provider>
     </SessionCtx.Provider>
+  )
+}
+
+/** Reviewer control for the shared preview progress store (never the app's data). */
+function PreviewDataControl() {
+  const st = usePreview()
+  const reset = (to: 'demo' | 'empty') => {
+    if (confirm(to === 'demo' ? 'Restore the predefined demo scenario? Preview plans and records you created will be removed.' : 'Clear all preview data (plans, records, achievements, stars) and start empty?')) progressActions.reset(to)
+  }
+  return (
+    <div className="flex items-center gap-1.5" title={`Preview-only data · localStorage key ${STORAGE_KEY}`} data-preview-data>
+      <span className={`rounded-full px-2 py-1 text-[10.5px] font-semibold ${isDemoData(st) ? 'bg-[#2a7bb6]/10 text-[#2a7bb6]' : 'bg-black/[.06] text-black/55'}`}>{isDemoData(st) ? 'DEMO DATA' : 'PREVIEW DATA'}</span>
+      <button type="button" onClick={() => reset('demo')} className="h-8 rounded-full bg-white px-3 ring-1 ring-black/10 hover:ring-black/30" data-header-reset="demo">Reset demo</button>
+      <button type="button" onClick={() => reset('empty')} className="h-8 rounded-full bg-white px-3 ring-1 ring-black/10 hover:ring-black/30" data-header-reset="empty">Start empty</button>
+    </div>
   )
 }
 

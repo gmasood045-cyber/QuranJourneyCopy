@@ -1,57 +1,19 @@
 // المكافآت والإنجازات — adult and children's rewards (design preview).
-// Every achievement is computed from the preview's DEMO records (data.ts), using
-// the same rules a real implementation must follow:
-//   • only explicitly confirmed, mastered memorisation counts as memorisation
-//   • reading, listening, Tafsir, reflection or browsing never count as memorisation
-//   • revision achievements need completed revision tasks
-//   • nothing is ever deducted, there are no streak penalties and no leaderboards
+// Everything is derived from the shared preview store (../progress):
+//   • achievements are the ACHIEVEMENTS rules evaluated on the records; an earned
+//     one is stored once with its date and triggering event and never removed
+//   • only explicitly confirmed memorisation counts as memorisation; revision and
+//     reading are separate; nothing is deducted; no streaks, no leaderboards
+//   • kids' stars come from completed lesson records (one per lesson)
 // Nothing here touches the app store or a real account.
 import { useState } from 'react'
-import { Chrome, Demo, Head, Icon, MoreTabs, toAr, useDevice, useProto } from '../core'
-import { DEMO_MEMORISED, JUZ_AR, JUZ_INFO, KIDS_ROOMS, TOTAL_MEMORISED, surahMemorised, weekLog } from '../data'
-import { weekOrder } from '../../../components/PlanParts'
-import { SURAHS, surah } from '../../../lib/quran'
+import { Chrome, Head, Icon, MoreTabs, toAr, useDevice, useProto } from '../core'
+import { ACHIEVEMENTS, KIDS_BADGES, actions, derived, fmtDate, isDemoData, usePreview, type AchDef } from '../progress'
+import { DataBar } from '../previewUi'
 
-type Badge = { id: string; group: string; ar: string; icon: string; earned: boolean; progress: number; evidence: string }
 const ayatLabel = (n: number) => `${toAr(n)} ${n >= 3 && n <= 10 ? 'آيات' : 'آية'}`
-const daysLabel = (n: number) => (n === 1 ? 'يوم واحد' : n === 2 ? 'يومان' : `${toAr(n)} ${n >= 3 && n <= 10 ? 'أيام' : 'يوم'}`)
-
-// ---- Adult rules, evaluated against the demo records
-function adultStats() {
-  const week = weekLog(new Date().getDay(), weekOrder('ar'))
-  const sofar = week.filter((d) => d.past || d.today)
-  const revDays = sofar.filter((d) => d.tasks.some((t) => t.plan.kind === 'revision' && t.done >= t.total))
-  const revPlanned = sofar.filter((d) => d.tasks.some((t) => t.plan.kind === 'revision'))
-  const today = week.find((d) => d.today)!
-  const todayRev = today.tasks.find((t) => t.plan.kind === 'revision')
-  const present = sofar.filter((d) => d.tasks.some((t) => t.done > 0))
-  const surahsDone = SURAHS.filter((x) => surahMemorised(x.n) === x.ayat)
-  const m = (n: number) => ({ earned: TOTAL_MEMORISED >= n, progress: Math.min(1, TOTAL_MEMORISED / n) })
-  const juz: Badge[] = JUZ_INFO.filter((j) => j.status !== 'idle').map((j) => ({
-    id: `juz-${j.j}`,
-    group: 'juz',
-    ar: `الجزء ${JUZ_AR[j.j - 1]}`,
-    icon: 'book',
-    earned: j.status === 'done',
-    progress: j.memorised / j.total,
-    evidence: `${toAr(j.memorised)} من ${toAr(j.total)} آية محفوظة بتأكيد`,
-  }))
-  const badges: Badge[] = [
-    { id: 'first-surah', group: 'hifz', ar: 'أول سورة كاملة', icon: 'sprout', earned: surahsDone.length > 0, progress: surahsDone.length > 0 ? 1 : 0, evidence: surahsDone.length ? `${toAr(surahsDone.length)} سورة محفوظة كاملة` : 'لا توجد سورة مكتملة بعد' },
-    { id: 'h100', group: 'hifz', ar: '١٠٠ آية محفوظة', icon: 'star', ...m(100), evidence: `${toAr(TOTAL_MEMORISED)} آية مؤكّدة` },
-    { id: 'h500', group: 'hifz', ar: '٥٠٠ آية محفوظة', icon: 'star', ...m(500), evidence: `${toAr(TOTAL_MEMORISED)} من ٥٠٠` },
-    { id: 'h1000', group: 'hifz', ar: '١٠٠٠ آية محفوظة', icon: 'star', ...m(1000), evidence: `${toAr(TOTAL_MEMORISED)} من ١٠٠٠` },
-    { id: 'mulk', group: 'hifz', ar: 'سورة الملك كاملة', icon: 'shield', earned: surahMemorised(67) === 30, progress: surahMemorised(67) / 30, evidence: `${toAr(surahMemorised(67))} من ٣٠ آية` },
-    ...juz,
-    { id: 'rev-today', group: 'revision', ar: 'أتممت مراجعة اليوم', icon: 'repeat', earned: !!todayRev && todayRev.done >= todayRev.total, progress: todayRev ? Math.min(1, todayRev.done / todayRev.total) : 0, evidence: todayRev ? `${toAr(todayRev.done)} من ${toAr(todayRev.total)} آية مراجعة اليوم` : 'لا مراجعة في خطة اليوم' },
-    { id: 'rev-3', group: 'revision', ar: 'ثلاثة أيام مراجعة هذا الأسبوع', icon: 'repeat', earned: revDays.length >= 3, progress: Math.min(1, revDays.length / 3), evidence: `${daysLabel(revDays.length)} أُتمّت فيها المراجعة` },
-    { id: 'rev-week', group: 'revision', ar: 'مراجعة الأسبوع كما خطّطت', icon: 'calendar', earned: revPlanned.length > 0 && revDays.length === revPlanned.length, progress: revPlanned.length ? revDays.length / revPlanned.length : 0, evidence: `${toAr(revDays.length)} من ${toAr(revPlanned.length)} أيام مراجعة حتى اليوم` },
-    { id: 'present-3', group: 'consistency', ar: 'حاضر ثلاثة أيام هذا الأسبوع', icon: 'sun', earned: present.length >= 3, progress: Math.min(1, present.length / 3), evidence: `حضرت ${daysLabel(present.length)} · الأيام الأخرى لا تُنقص شيئًا` },
-  ]
-  return { badges, revDays: revDays.length }
-}
-const GROUPS: Record<string, string> = { hifz: 'محطات الحفظ', juz: 'الأجزاء', revision: 'المراجعة', consistency: 'الثبات' }
-const ranges = () => DEMO_MEMORISED.map(([a, b]) => `${surah(a[0]).ar} ${toAr(a[1])}–${surah(b[0]).ar} ${toAr(b[1])}`).join('، ')
+const GROUPS: Record<AchDef['group'], string> = { hifz: 'الحفظ', juz: 'الأجزاء', revision: 'المراجعة', consistency: 'الثبات', plans: 'الخطط' }
+const eventAr = (e: string) => (e === 'demo-seed' ? 'السيناريو التجريبي' : e.startsWith('task:') ? 'إتمام مهمة خطة' : e.startsWith('mem:journey') ? '«أتقنتها» في رحلة الحفظ' : e.startsWith('rev:') ? 'مراجعة مكتملة' : e.startsWith('lesson:') ? 'إتمام درس' : e.startsWith('edit:') ? 'تحديث خطة' : 'حدث في المعاينة')
 
 export function Rewards() {
   const { nav, go } = useProto()
@@ -68,7 +30,7 @@ export function Rewards() {
     <Chrome>
       <div className={desk ? 'no-scrollbar h-full overflow-y-auto px-10 py-9' : 'px-5 pb-8 pt-4'}>
         {!desk && <MoreTabs />}
-        <Head title="المكافآت والإنجازات" sub={kids ? 'نجوم وأوسمة لكل خطوة تعلّمتها حقًّا، بلا مقارنة ولا خسارة.' : 'احتفاء هادئ بما أتممته فعلًا: حفظ مؤكَّد، ومراجعة مكتملة، وثبات على خطتك.'} action={<Demo />} />
+        <Head title="المكافآت والإنجازات" sub={kids ? 'نجوم وأوسمة لكل خطوة تعلّمتها حقًّا، بلا مقارنة ولا خسارة.' : 'احتفاء هادئ بما أتممته فعلًا: حفظ مؤكَّد، ومراجعة مكتملة، وثبات على خطتك.'} action={<DataBar />} />
         <div className="mb-5">{toggle}</div>
         {kids ? <KidsRewards /> : <AdultRewards />}
       </div>
@@ -77,52 +39,56 @@ export function Rewards() {
 }
 
 // ---- Adult
+type Badge = { def: AchDef; p: number; evidence: string; earned: { at: string; eventId: string; demo?: boolean } | null }
 function AdultRewards() {
   const desk = useDevice() === 'desktop'
   const { go } = useProto()
-  const { badges, revDays } = adultStats()
+  const st = usePreview()
+  const d = derived(st)
+  const badges: Badge[] = ACHIEVEMENTS.filter((a) => st.achievements[a.id] || !a.hidden?.(d)).map((a) => ({ def: a, ...a.eval(d), earned: st.achievements[a.id] ?? null }))
   const [open, setOpen] = useState<Badge | null>(null)
-  const earned = badges.filter((b) => b.earned)
-  const juzDone = JUZ_INFO.filter((j) => j.status === 'done').length
+  const earned = badges.filter((b) => b.earned).sort((a, b) => b.earned!.at.localeCompare(a.earned!.at))
+  const juzDone = d.juz.filter((j) => j.status === 'done').length
   return (
     <div className="space-y-5" data-mode="adult">
       <div className={`grid gap-3 ${desk ? 'grid-cols-4' : 'grid-cols-2'}`}>
-        <Summary icon="sprout" v={ayatLabel(TOTAL_MEMORISED)} l="محفوظة بتأكيد" id="memorised" />
+        <Summary icon="sprout" v={ayatLabel(d.memCount)} l="محفوظة بتأكيد" id="memorised" />
         <Summary icon="book" v={`${toAr(juzDone)} من ٣٠`} l="أجزاء مكتملة" />
-        <Summary icon="star" v={toAr(earned.length)} l="إنجازات نلتها" />
-        <Summary icon="repeat" v={daysLabel(revDays)} l="مراجعة مكتملة هذا الأسبوع" />
+        <Summary icon="star" v={toAr(earned.length)} l="إنجازات نلتها" id="earned" />
+        <Summary icon="repeat" v={toAr(d.revSessions)} l="مراجعات مكتملة" id="revisions" />
       </div>
-      <p className="text-[12px] leading-relaxed text-muted">محسوبة من سجلات الحفظ المؤكَّدة التجريبية ({ranges()}) وسجل خطة الأسبوع التجريبي.</p>
+      <p className="text-[12px] leading-relaxed text-muted">{isDemoData(st) ? 'تشمل سجلات تجريبية محدّدة مسبقًا بتواريخ ثابتة؛ الإنجازات المعلَّمة «تجريبي» ليست إنجازات حقيقية.' : 'محسوبة من سجلاتك في المعاينة فقط.'} المراجعة والقراءة لا تزيدان الآيات المحفوظة، والأيام النشطة تُعدّ مجموعًا لا سلسلة.</p>
 
       {open && (
-        <div role="dialog" aria-label="احتفاء بالإنجاز" className="flex items-center gap-4 rounded-[26px] bg-gold-soft/60 p-5 ring-1 ring-gold/30">
-          <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gold text-white"><Icon name={open.icon} size={24} /></span>
+        <div role="dialog" aria-label="تفاصيل الإنجاز" className="flex items-center gap-4 rounded-[26px] bg-gold-soft/60 p-5 ring-1 ring-gold/30">
+          <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gold text-white"><Icon name={open.def.icon} size={24} /></span>
           <div className="flex-1">
-            <p className="text-[16px] font-semibold">{open.earned ? `ما شاء الله · ${open.ar}` : `في الطريق إلى: ${open.ar}`}</p>
-            <p className="text-[12.5px] text-night/75">{open.evidence}{open.earned ? ' · بارك الله في وقتك وجهدك.' : ' · تقدّم بهدوء؛ كل آية تُتقنها تبقى لك.'}</p>
+            <p className="text-[16px] font-semibold">{open.earned ? `ما شاء الله · ${open.def.ar}` : `في الطريق إلى: ${open.def.ar}`}</p>
+            <p className="text-[12.5px] text-night/75">{open.evidence}{open.earned ? ` · نِلته ${fmtDate(open.earned.at.slice(0, 10))} عبر ${eventAr(open.earned.eventId)}${open.earned.demo ? ' (تجريبي)' : ''}` : ' · تقدّم بهدوء؛ لا شيء يُخصم.'}</p>
           </div>
           <button type="button" onClick={() => setOpen(null)} aria-label="إغلاق" className="press flex h-9 w-9 items-center justify-center rounded-full bg-card"><Icon name="x" size={15} /></button>
         </div>
       )}
 
-      {Object.entries(GROUPS).map(([g, title]) => {
-        const list = badges.filter((b) => b.group === g)
+      {(Object.keys(GROUPS) as AchDef['group'][]).map((g) => {
+        const list = badges.filter((b) => b.def.group === g)
         if (!list.length) return null
         return (
-          <section key={g} aria-label={title}>
+          <section key={g} aria-label={GROUPS[g]}>
             <div className="mb-2 flex items-center gap-2">
-              <h2 className="text-[15px] font-semibold">{title}</h2>
+              <h2 className="text-[15px] font-semibold">{GROUPS[g]}</h2>
               {g === 'juz' && <button type="button" onClick={() => go('library')} className="press ms-auto flex items-center gap-1 rounded-full px-3 py-1 text-[12px] text-muted hover:bg-night/[.04]"><Icon name="layers" size={14} />مكتبة إنجازاتي</button>}
+              {g === 'plans' && <button type="button" onClick={() => go('plans')} className="press ms-auto flex items-center gap-1 rounded-full px-3 py-1 text-[12px] text-muted hover:bg-night/[.04]"><Icon name="target" size={14} />خططي</button>}
             </div>
             <ul className={`grid gap-2.5 ${desk ? 'grid-cols-3' : 'grid-cols-1'}`}>
               {list.map((b) => (
-                <li key={b.id}>
-                  <button type="button" onClick={() => setOpen(b)} data-earned={b.earned} className={`press flex w-full items-center gap-3 rounded-[20px] p-3.5 text-start ring-1 ${b.earned ? 'bg-card ring-gold/40' : 'bg-card/60 ring-line'}`}>
-                    <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${b.earned ? 'bg-gold text-white' : 'bg-night/[.05] text-muted'}`}><Icon name={b.earned ? b.icon : 'lock'} size={18} /></span>
+                <li key={b.def.id}>
+                  <button type="button" onClick={() => setOpen(b)} data-ach={b.def.id} data-earned={!!b.earned} className={`press flex w-full items-center gap-3 rounded-[20px] p-3.5 text-start ring-1 ${b.earned ? 'bg-card ring-gold/40' : 'bg-card/60 ring-line'}`}>
+                    <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${b.earned ? 'bg-gold text-white' : 'bg-night/[.05] text-muted'}`}><Icon name={b.earned ? b.def.icon : 'lock'} size={18} /></span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13.5px] font-semibold">{b.ar}</span>
-                      <span className="mt-1 block h-1.5 overflow-hidden rounded-full bg-night/10"><span className={`block h-full rounded-full ${b.earned ? 'bg-gold' : 'bg-sage'}`} style={{ width: `${Math.round(b.progress * 100)}%` }} /></span>
-                      <span className="mt-1 block truncate text-[11.5px] text-muted">{b.earned ? 'نلته' : 'في الطريق'} · {b.evidence}</span>
+                      <span className="block text-[13.5px] font-semibold">{b.def.ar}{b.earned?.demo && <span className="ms-1 rounded-full bg-sky/10 px-1.5 text-[10px] font-semibold text-sky">تجريبي</span>}</span>
+                      <span className="mt-1 block h-1.5 overflow-hidden rounded-full bg-night/10"><span className={`block h-full rounded-full ${b.earned ? 'bg-gold' : 'bg-sage'}`} style={{ width: `${Math.round((b.earned ? 1 : b.p) * 100)}%` }} /></span>
+                      <span className="mt-1 block truncate text-[11.5px] text-muted">{b.earned ? `نلته ${fmtDate(b.earned.at.slice(0, 10))}` : 'في الطريق'} · {b.evidence}</span>
                     </span>
                   </button>
                 </li>
@@ -134,16 +100,18 @@ function AdultRewards() {
 
       <section aria-label="سجل الإنجازات" className="rounded-[26px] bg-card p-5 ring-1 ring-line">
         <h2 className="text-[15px] font-semibold">سجلّ ما نلته</h2>
-        <p className="mb-3 text-[11.5px] text-muted">مرتّب حسب المحطة؛ لا تُعرض تواريخ لأن السجل التجريبي لا يحملها.</p>
-        <ol className="relative space-y-3 border-s-2 border-gold/30 ps-4">
-          {earned.map((b) => (
-            <li key={b.id} className="relative">
-              <span className="absolute -start-[23px] top-1 h-3 w-3 rounded-full bg-gold ring-4 ring-card" />
-              <p className="text-[13.5px] font-medium">{b.ar}</p>
-              <p className="text-[11.5px] text-muted">{b.evidence}</p>
-            </li>
-          ))}
-        </ol>
+        <p className="mb-3 text-[11.5px] text-muted">كل إنجاز يُسجَّل مرة واحدة مع تاريخه والحدث الذي حقّقه، ولا يُسحب أبدًا.</p>
+        {earned.length === 0 ? <p className="text-[13px] text-muted">لم تنل إنجازًا بعد. ابدأ بخطة أو أتقن آية في رحلة الحفظ.</p> : (
+          <ol className="relative space-y-3 border-s-2 border-gold/30 ps-4" data-history>
+            {earned.map((b) => (
+              <li key={b.def.id} className="relative">
+                <span className="absolute -start-[23px] top-1 h-3 w-3 rounded-full bg-gold ring-4 ring-card" />
+                <p className="text-[13.5px] font-medium">{b.def.ar}{b.earned!.demo ? ' · تجريبي' : ''}</p>
+                <p className="text-[11.5px] text-muted">{fmtDate(b.earned!.at.slice(0, 10))} · {eventAr(b.earned!.eventId)} · {b.evidence}</p>
+              </li>
+            ))}
+          </ol>
+        )}
       </section>
 
       <RulesLab />
@@ -177,7 +145,7 @@ function RulesLab() {
   return (
     <section aria-label="كيف تُحتسب المكافآت" className="rounded-[26px] bg-card p-5 ring-1 ring-line">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="flex-1 text-[15px] font-semibold">كيف تُحتسب المكافآت؟ جرّب بنفسك</h2>
+        <h2 className="flex-1 text-[15px] font-semibold">كيف تُحتسب المكافآت؟ جرّب بنفسك <span className="text-[11.5px] font-normal text-muted">(مختبر توضيحي · لا يغيّر بياناتك)</span></h2>
         <span className="rounded-full bg-night/[.05] px-3 py-1 text-[12px]" data-count="hifz">حفظ مؤكَّد: <b>+{toAr(hifz)}</b></span>
         <span className="rounded-full bg-night/[.05] px-3 py-1 text-[12px]" data-count="rev">مراجعة: <b>+{toAr(rev)}</b></span>
       </div>
@@ -225,19 +193,12 @@ const TILES = ['bg-kid-1', 'bg-kid-2', 'bg-kid-3', 'bg-kid-4', 'bg-kid-5']
 function KidsRewards() {
   const desk = useDevice() === 'desktop'
   const { go } = useProto()
-  const stars = KIDS_ROOMS.reduce((n, r) => n + r.done, 0)
+  const st = usePreview()
+  const d = derived(st)
+  const stars = d.stars
   const unlocked = Math.min(STICKERS.length, Math.floor(stars / PER_STICKER))
   const toNext = PER_STICKER - (stars % PER_STICKER)
-  const [theme, setTheme] = useState('garden')
-  const room = (id: string) => KIDS_ROOMS.find((r) => r.id === id)!
-  const badges = [
-    { ar: 'صديق الحروف', icon: 'letters', earned: room('letters').done >= 10, hint: `${toAr(room('letters').done)} حرفًا` },
-    { ar: 'بطل الحركات', icon: 'sparkle', earned: room('harakat').done >= room('harakat').total, hint: `${toAr(room('harakat').done)} من ${toAr(room('harakat').total)}` },
-    { ar: 'أول كلمة موصولة', icon: 'layers', earned: room('joining').done >= 1, hint: room('joining').done ? 'أحسنت' : 'قريبًا' },
-    { ar: 'قارئ صغير', icon: 'book', earned: room('reading').done >= 1, hint: room('reading').done ? 'أحسنت' : 'قريبًا' },
-    { ar: 'حافظ السور القصيرة', icon: 'heart', earned: room('surahs').done >= 3, hint: `${toAr(room('surahs').done)} سور أكّدها وليّ الأمر` },
-  ]
-  const t = THEMES.find((x) => x.id === theme)!
+  const t = THEMES.find((x) => x.id === st.decor && stars >= x.need) ?? THEMES[0]
   return (
     <div className="space-y-5" data-mode="kids">
       <div className={`grid gap-4 ${desk ? 'grid-cols-[1.2fr_1fr]' : 'grid-cols-1'}`}>
@@ -245,33 +206,38 @@ function KidsRewards() {
           <p className="text-[14px] font-semibold">نجومي</p>
           <p className="mt-2 text-[54px] font-bold leading-none" data-stars={stars}>{toAr(stars)}</p>
           <div className="mt-3 flex flex-wrap justify-center gap-1" aria-hidden>{Array.from({ length: Math.min(stars, 30) }, (_, i) => <Icon key={i} name="star" size={16} fill className="text-gold" />)}</div>
-          <p className="mt-3 text-[13px]">نجمة لكل درس أتممته. بقي {toAr(toNext)} {toNext > 2 ? 'نجوم' : 'نجمة'} لملصق جديد!</p>
+          <p className="mt-3 text-[13px]">{stars === 0 ? 'أتمم درسك الأول لتنال أول نجمة!' : unlocked >= STICKERS.length ? 'جمعت كل الملصقات، ما شاء الله!' : `نجمة لكل درس أتممته. بقي ${toAr(toNext)} ${toNext > 2 ? 'نجوم' : 'نجمة'} لملصق جديد!`}</p>
+          <span className="mx-auto mt-3 block h-2 max-w-[260px] overflow-hidden rounded-full bg-card/70"><span className="block h-full rounded-full bg-gold" style={{ width: `${((stars % PER_STICKER) / PER_STICKER) * 100}%` }} /></span>
         </section>
         <section aria-label="زيّن بيتك" className={`rounded-[30px] p-6 ${t.tile}`}>
           <p className="text-[14px] font-semibold">زيّن بيتك (اختياري)</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {THEMES.map((x) => (
-              <button key={x.id} type="button" disabled={stars < x.need} onClick={() => setTheme(x.id)} aria-pressed={theme === x.id} className={`press flex items-center gap-1.5 rounded-full bg-card/80 px-3 py-2 text-[12.5px] ring-2 disabled:opacity-50 ${theme === x.id ? 'ring-night' : 'ring-transparent'}`}>
+              <button key={x.id} type="button" disabled={stars < x.need} onClick={() => actions.setDecor(x.id)} aria-pressed={t.id === x.id} data-decor={x.id} className={`press flex items-center gap-1.5 rounded-full bg-card/80 px-3 py-2 text-[12.5px] ring-2 disabled:opacity-50 ${t.id === x.id ? 'ring-night' : 'ring-transparent'}`}>
                 <span className={`h-4 w-4 rounded-full ${x.tile} ring-1 ring-night/10`} />
                 {x.ar}
                 {stars < x.need && <span className="text-muted"> · {toAr(x.need)} نجمة</span>}
               </button>
             ))}
           </div>
-          <p className="mt-3 text-[12px] text-night/70">زينة فقط؛ لا تغيّر الدروس ولا التقدّم.</p>
+          <p className="mt-3 text-[12px] text-night/70">زينة فقط تُحفظ في المعاينة؛ لا تغيّر الدروس ولا التقدّم.</p>
         </section>
       </div>
 
       <section aria-label="أوسمتي">
         <h2 className="mb-2 text-[15px] font-semibold">أوسمتي</h2>
         <ul className={`grid gap-3 ${desk ? 'grid-cols-5' : 'grid-cols-2'}`}>
-          {badges.map((b, i) => (
-            <li key={b.ar} data-earned={b.earned} className={`rounded-[24px] p-4 text-center ${b.earned ? TILES[i % 5] : 'bg-card/70 ring-1 ring-dashed ring-line'}`}>
-              <span className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full ${b.earned ? 'bg-card text-gold' : 'bg-night/[.05] text-muted'}`}><Icon name={b.earned ? b.icon : 'lock'} size={24} /></span>
-              <p className="mt-2 text-[13.5px] font-semibold">{b.ar}</p>
-              <p className="text-[11.5px] text-muted">{b.earned ? 'ما شاء الله!' : 'قريبًا'} · {b.hint}</p>
-            </li>
-          ))}
+          {KIDS_BADGES.map((b, i) => {
+            const e = st.kidsBadges[b.id]
+            const ev = b.eval(d)
+            return (
+              <li key={b.id} data-kbadge={b.id} data-earned={!!e} className={`rounded-[24px] p-4 text-center ${e ? TILES[i % 5] : 'bg-card/70 ring-1 ring-dashed ring-line'}`}>
+                <span className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full ${e ? 'bg-card text-gold' : 'bg-night/[.05] text-muted'}`}><Icon name={e ? b.icon : 'lock'} size={24} /></span>
+                <p className="mt-2 text-[13.5px] font-semibold">{b.ar}</p>
+                <p className="text-[11.5px] text-muted">{e ? `ما شاء الله! · ${fmtDate(e.at.slice(0, 10))}${e.demo ? ' · تجريبي' : ''}` : ev.evidence}</p>
+              </li>
+            )
+          })}
         </ul>
       </section>
 
@@ -290,7 +256,7 @@ function KidsRewards() {
       <section className="rounded-[26px] bg-card p-5 ring-1 ring-line" aria-label="لولي الأمر">
         <p className="text-[13.5px] font-semibold">لوليّ الأمر</p>
         <ul className="mt-2 space-y-1 text-[12.5px] text-night/80">
-          <li>• النجمة تُمنح عند إتمام درس فعلًا، لا بمجرد فتحه أو الاستماع.</li>
+          <li>• النجمة تُمنح مرة واحدة عند إتمام درس فعلًا، لا بمجرد فتحه أو تكرار الضغط.</li>
           <li>• السورة القصيرة تُحسب محفوظة فقط حين تؤكّد أنت أن طفلك أتقنها.</li>
           <li>• لا تُسحب نجمة أبدًا، ولا مقارنة بين الأطفال.</li>
         </ul>

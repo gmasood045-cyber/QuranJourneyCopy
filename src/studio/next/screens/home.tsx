@@ -3,9 +3,11 @@ import { useContext, useEffect, useState, type ReactNode } from 'react'
 import { MushafCtx } from './mushaf'
 import { navTo } from '../../mushaf/page'
 import { Chrome, Demo, Icon, toAr, useDevice, useProto } from '../core'
-import { JUZ_INFO, azkarTitle, timeOfDay, weekLog } from '../data'
-import { weekOrder } from '../../../components/PlanParts'
+import { azkarTitle, timeOfDay } from '../data'
 import { fromGIndex, loadMushaf, surah } from '../../../lib/quran'
+import { ACHIEVEMENTS, ACTIVITY_AR, derived, fmtDate, rangeAr, unitAr, usePreview, weekTasks } from '../progress'
+import { DataBar } from '../previewUi'
+import { useStartTask } from '../taskNav'
 
 function useAyahOfDay() {
   const d = new Date()
@@ -33,9 +35,13 @@ export function HomeDashboard() {
   const device = useDevice()
   const { go } = useProto()
   const mushaf = useContext(MushafCtx)
-  const today = weekLog(new Date().getDay(), weekOrder('ar')).find((x) => x.today)!
-  const qDone = today.tasks.reduce((n, t) => n + Math.min(t.done, t.total), 0)
-  const qTotal = today.tasks.reduce((n, t) => n + t.total, 0)
+  const st = usePreview()
+  const pd = derived(st)
+  const start = useStartTask()
+  const today = weekTasks(st).find((x) => x.today)!
+  const tasks = today.tasks.filter((t) => t.state !== 'paused')
+  const qDone = tasks.filter((t) => t.state === 'done').length
+  const qTotal = tasks.length
   const now = timeOfDay()
   const aod = useAyahOfDay()
   const hijri = new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date())
@@ -53,7 +59,7 @@ export function HomeDashboard() {
     <header className={`hero-fade relative text-white ${desk ? 'rounded-[32px] px-10 pb-28 pt-8' : 'px-5 pb-24 pt-14'}`}>
       <div className="flex items-center gap-2">
         <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[12.5px] backdrop-blur"><Icon name="calendar" size={14} />{hijri}</span>
-        <span className="ms-auto"><Demo className="bg-white/20 text-white" /></span>
+        <span className="ms-auto rounded-full bg-white/90 text-night"><DataBar compact /></span>
       </div>
       <p className="mt-6 text-[15px] text-white/80">{greet}، مريم</p>
       <h1 className={`mt-1.5 font-bold leading-[1.3] ${desk ? 'text-[2.2rem]' : 'text-[1.6rem]'}`}>رحلتك اليوم</h1>
@@ -74,24 +80,29 @@ export function HomeDashboard() {
   )
 
   const quranCard = (
-    <Card title="رحلة القرآن" icon="book" action={<Link onClick={() => go('week')}>خطة الأسبوع</Link>}>
-      <ul className="space-y-3">
-        {today.tasks.length === 0 && <li className="text-[13px] text-muted">اليوم يوم راحة في خطتك.</li>}
-        {today.tasks.map((t) => (
-          <li key={t.plan.kind} className="flex items-center gap-3">
-            <span className={`flex h-9 w-9 items-center justify-center rounded-full ${t.done >= t.total ? 'bg-leaf/12 text-leaf' : 'bg-gold-soft text-gold'}`}><Icon name={t.done >= t.total ? 'check' : t.plan.kind === 'hifz' ? 'sprout' : t.plan.kind === 'revision' ? 'repeat' : 'book'} size={16} /></span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[13.5px] font-medium">{t.plan.kind === 'hifz' ? 'حفظ' : t.plan.kind === 'revision' ? 'مراجعة مستحقة' : 'ورد القراءة'} <span className="text-muted">· {toAr(t.done)}/{toAr(t.total)} {t.plan.unit}</span></p>
-              <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-night/10"><span className="block h-full rounded-full" style={{ width: `${(t.done / t.total) * 100}%`, background: t.done >= t.total ? 'var(--color-leaf)' : 'var(--color-gold)' }} /></span>
-            </div>
-          </li>
-        ))}
+    <Card title="رحلة القرآن" icon="book" action={<span className="flex gap-3"><Link onClick={() => go('plans')}>خططي</Link><Link onClick={() => go('week')}>خطة الأسبوع</Link></span>}>
+      <ul className="space-y-3" data-home-tasks>
+        {st.plans.length === 0 && <li className="text-[13px] text-muted">لا توجد خطط بعد. <button type="button" onClick={() => go('plans', 'new')} className="font-semibold text-gold underline">أنشئ خطتك الأولى</button></li>}
+        {st.plans.length > 0 && tasks.length === 0 && <li className="text-[13px] text-muted">اليوم يوم راحة في خططك.</li>}
+        {tasks.map((t) => {
+          const done = t.state === 'done'
+          return (
+            <li key={t.id} className="flex items-center gap-3">
+              <span className={`flex h-9 w-9 items-center justify-center rounded-full ${done ? 'bg-leaf/12 text-leaf' : 'bg-gold-soft text-gold'}`}><Icon name={done ? 'check' : t.activity === 'hifz' ? 'sprout' : t.activity === 'revision' ? 'repeat' : 'book'} size={16} /></span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[13.5px] font-medium">{ACTIVITY_AR[t.activity]} · <span className="text-muted">{t.plan.name}</span></p>
+                <p className="text-[12px] text-muted">{t.from != null ? `${rangeAr(t.unit, t.from, t.to!)} · ${toAr(t.to! - t.from + 1)} ${unitAr(t.unit, t.to! - t.from + 1)}` : ''} · {done ? 'مكتملة' : 'مستحقّة'}</p>
+              </div>
+              {t.state === 'open' && <button type="button" onClick={() => start(t)} className="press h-8 rounded-full bg-night px-3 text-[12px] font-semibold text-parchment">ابدأ</button>}
+            </li>
+          )
+        })}
       </ul>
       <div className="mt-4 grid grid-cols-2 gap-2">
         <button type="button" onClick={() => go('ayah')} className="press flex h-11 items-center justify-center gap-1.5 rounded-full bg-night text-[13px] font-semibold text-parchment"><Icon name="sprout" size={16} />تابع الحفظ</button>
-        <button type="button" onClick={() => (mushaf.set({ stage: 'reader', nav: navTo(mushaf.s.nav.pg) }), go('mushaf'))} className="press flex h-11 items-center justify-center gap-1.5 rounded-full bg-gold-soft text-[13px] font-semibold"><Icon name="book" size={16} />تابع القراءة في المصحف</button>
+        <button type="button" onClick={() => (mushaf.set({ stage: 'reader', nav: navTo(pd.lastReading?.unit === 'page' ? Math.min(604, pd.lastReading.to + 1) : mushaf.s.nav.pg) }), go('mushaf'))} className="press flex h-11 items-center justify-center gap-1.5 rounded-full bg-gold-soft text-[13px] font-semibold"><Icon name="book" size={16} />تابع القراءة في المصحف</button>
       </div>
-      <p className="mt-3 text-[11.5px] text-muted">آخر قراءة: سورة الكهف · ص ٢٩٥ (تجريبي)</p>
+      <p className="mt-3 text-[11.5px] text-muted">{pd.lastReading ? `آخر قراءة مسجّلة: ${rangeAr(pd.lastReading.unit, pd.lastReading.from, pd.lastReading.to)} · ${fmtDate(pd.lastReading.at.slice(0, 10))}${pd.lastReading.source === 'demo' ? ' (تجريبي)' : ''}` : 'لا قراءة مسجّلة بعد.'}</p>
     </Card>
   )
 
@@ -118,18 +129,25 @@ export function HomeDashboard() {
     </Card>
   )
 
+  const earned = Object.values(st.achievements).sort((x, y) => y.at.localeCompare(x.at)).slice(0, 3)
   const recent = (
-    <Card title="إنجازات قريبة" icon="star" action={<Link onClick={() => go('library')}>المكتبة</Link>}>
-      <ul className="space-y-2.5">
-        {JUZ_INFO.filter((j) => j.status !== 'idle').slice(-2).reverse().map((j) => (
-          <li key={j.j}>
-            <button type="button" onClick={() => go('map')} className="press flex w-full items-center gap-3 rounded-[16px] p-2 text-start hover:bg-night/[.03]">
-              <span className={`flex h-10 w-10 items-center justify-center rounded-[12px] ${j.status === 'done' ? 'bg-leaf/12 text-leaf' : 'bg-gold-soft text-gold'}`}><Icon name={j.status === 'done' ? 'check' : 'path'} size={18} /></span>
-              <span className="flex-1"><span className="block text-[13.5px] font-medium">{j.status === 'done' ? `أتممت حفظ الجزء ${toAr(j.j)}` : `أُضيئت محطة الجزء ${toAr(j.j)}`}</span><span className="block text-[11.5px] text-muted">{toAr(j.memorised)} من {toAr(j.total)} آية</span></span>
-            </button>
-          </li>
-        ))}
-      </ul>
+    <Card title="إنجازات قريبة" icon="star" action={<Link onClick={() => go('rewards')}>كل الإنجازات</Link>}>
+      {earned.length === 0 ? <p className="text-[13px] text-muted">لا إنجازات بعد. تُمنح حين تُتمّ حفظًا مؤكّدًا أو مراجعة أو خطة.</p> : (
+        <ul className="space-y-2.5" data-home-recent>
+          {earned.map((e) => {
+            const def = ACHIEVEMENTS.find((a) => a.id === e.id)
+            return (
+              <li key={e.id}>
+                <button type="button" onClick={() => go(e.id.startsWith('juz-') ? 'map' : 'rewards')} className="press flex w-full items-center gap-3 rounded-[16px] p-2 text-start hover:bg-night/[.03]">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-gold-soft text-gold"><Icon name={def?.icon ?? 'star'} size={18} /></span>
+                  <span className="flex-1"><span className="block text-[13.5px] font-medium">{def?.ar ?? e.id}</span><span className="block text-[11.5px] text-muted">{fmtDate(e.at.slice(0, 10))}{e.demo ? ' · تجريبي' : ''}</span></span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <p className="mt-3 text-[11.5px] text-muted">{toAr(pd.memCount)} آية محفوظة بتأكيد · {toAr(pd.juz.filter((j) => j.status === 'done').length)} أجزاء مكتملة</p>
     </Card>
   )
 

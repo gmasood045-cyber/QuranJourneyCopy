@@ -1,10 +1,17 @@
-// عالم الأطفال — isometric learning house (design preview). A navigation layer
-// over the existing Kids lessons (screens/Kids.tsx); inventories come from
-// screens/kidsData.ts, completion is demonstration data.
-import { useState, type ReactNode } from 'react'
-import { Chrome, Demo, Head, Icon, MoreTabs, toAr, useDevice, useProto } from '../core'
-import { KIDS_ROOMS, roomStatus, type KidsRoom } from '../data'
-import { Box, GlowDefs, STATUS_COLOR, kernel, tint, type Faces } from '../iso'
+// عالم الأطفال — isometric learning house (design preview). Lesson inventories
+// come from screens/kidsData.ts; completion comes from the shared preview store
+// (../progress): every lesson has a stable id, is recorded once and earns one star.
+// Lessons are played inside the preview so nothing is written to the app's kids data.
+import { useMemo, useState, type ReactNode } from 'react'
+import { Chrome, Head, Icon, MoreTabs, toAr, useDevice, useProto } from '../core'
+import { Box, GlowDefs, STATUS_COLOR, kernel, tint, type Faces, type Status } from '../iso'
+import { actions, derived, usePreview, type Room as KidsRoom } from '../progress'
+import { DataBar } from '../previewUi'
+import { HARAKAT, JOIN_WORDS, LETTERS, READING_LESSONS } from '../../../screens/kidsData'
+import { surah } from '../../../lib/quran'
+
+const roomStatus = (r: KidsRoom): Status => (r.done === 0 ? 'idle' : r.done >= r.total ? 'done' : 'progress')
+const DECOR: Record<string, string> = { garden: 'var(--color-kid-1)', sun: 'var(--color-kid-2)', sky: 'var(--color-kid-3)', rose: 'var(--color-kid-4)', lilac: 'var(--color-kid-5)' }
 
 const WALL = 56
 const T = 6
@@ -16,15 +23,15 @@ const ROOMS: Record<KidsRoom['id'], Rect & { tone: string }> = {
   reading: { x: 0, y: 140, w: 168, d: 100, tone: 'var(--color-kid-4)' },
   surahs: { x: 168, y: 140, w: 168, d: 100, tone: 'var(--color-kid-5)' },
 }
-const ROUTE: Record<KidsRoom['id'], string> = { letters: '#/kids/letters', harakat: '#/kids/harakat', joining: '#/kids/joining', reading: '#/kids/reading', surahs: '#/kids/surahs' }
 
 /** Shortcut to the children's rewards (Rewards & Achievements, kids mode). */
 function StarsLink() {
   const { go } = useProto()
+  const stars = derived(usePreview()).stars
   return (
     <span className="flex shrink-0 items-center gap-2">
-      <button type="button" onClick={() => go('rewards', 'kids')} className="press flex h-9 items-center gap-1.5 rounded-full bg-kid-2 px-3 text-[12.5px] font-semibold"><Icon name="star" size={15} fill className="text-gold" />نجومي</button>
-      <Demo />
+      <button type="button" onClick={() => go('rewards', 'kids')} className="press flex h-9 items-center gap-1.5 rounded-full bg-kid-2 px-3 text-[12.5px] font-semibold" data-kids-stars={stars}><Icon name="star" size={15} fill className="text-gold" />نجومي · {toAr(stars)}</button>
+      <DataBar compact />
     </span>
   )
 }
@@ -32,7 +39,9 @@ function StarsLink() {
 export function KidsHouse() {
   const device = useDevice()
   const [sel, setSel] = useState<KidsRoom['id']>('letters')
-  const room = KIDS_ROOMS.find((r) => r.id === sel)!
+  const st = usePreview()
+  const rooms = derived(st).rooms
+  const room = rooms.find((r) => r.id === sel)!
   const intro = 'خمس غرف، لكل غرفة درس. اختر غرفة لترى رحلتها وتقدّمك فيها.'
   if (device === 'desktop')
     return (
@@ -40,7 +49,7 @@ export function KidsHouse() {
         <div className="flex h-full">
           <div className="no-scrollbar min-w-0 flex-1 overflow-y-auto px-10 py-9">
             <Head title="عالم الأطفال" sub={intro} action={<StarsLink />} />
-            <House sel={sel} onSel={setSel} />
+            <House rooms={rooms} decor={st.decor} sel={sel} onSel={setSel} />
           </div>
           <aside className="no-scrollbar w-[370px] shrink-0 overflow-y-auto border-s border-line/60 bg-card/60 p-6"><RoomPanel r={room} /></aside>
         </div>
@@ -51,9 +60,9 @@ export function KidsHouse() {
       <div className="px-5 pb-8 pt-4">
         <MoreTabs />
         <Head title="عالم الأطفال" sub={intro} action={<StarsLink />} />
-        <House sel={sel} onSel={setSel} />
+        <House rooms={rooms} decor={st.decor} sel={sel} onSel={setSel} />
         <div className="no-scrollbar mt-3 flex gap-2 overflow-x-auto pb-1">
-          {KIDS_ROOMS.map((r) => (
+          {rooms.map((r) => (
             <button key={r.id} type="button" onClick={() => setSel(r.id)} className={`press flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] ${sel === r.id ? 'bg-night text-parchment' : 'bg-card ring-1 ring-line'}`}>
               <Icon name={r.icon} size={15} />
               {r.ar}
@@ -66,16 +75,17 @@ export function KidsHouse() {
   )
 }
 
-function House({ sel, onSel }: { sel: KidsRoom['id']; onSel: (id: KidsRoom['id']) => void }) {
+function House({ rooms, decor, sel, onSel }: { rooms: KidsRoom[]; decor: string; sel: KidsRoom['id']; onSel: (id: KidsRoom['id']) => void }) {
   const k = kernel(244, 86)
-  const ground = tint('var(--color-leaf)', 0.18)
+  // The optional decoration the child unlocked tints the garden around the house.
+  const ground = tint(decor === 'garden' ? 'var(--color-leaf)' : DECOR[decor] ?? 'var(--color-leaf)', decor === 'garden' ? 0.18 : 0.5)
   return (
     <svg viewBox="0 0 540 420" className="mx-auto w-full max-w-[640px]" role="group" aria-label="بيت التعلّم: خمس غرف">
       <GlowDefs id="kid" />
       <Box k={k} x={-18} y={-18} z={-10} w={372} d={278} h={10} f={ground} />
       {/* Courtyard path between the two rows */}
       <polygon points={k.poly([[-18, 112], [354, 112], [354, 136], [-18, 136]].map(([x, y]) => [x, y, 0] as [number, number, number]))} fill="var(--color-card)" opacity={0.9} />
-      {KIDS_ROOMS.map((r) => (
+      {rooms.map((r) => (
         <Room key={r.id} k={k} r={r} rect={ROOMS[r.id]} on={sel === r.id} onSel={() => onSel(r.id)} />
       ))}
       {/* Entrance sign */}
@@ -192,28 +202,136 @@ function RoomPanel({ r }: { r: KidsRoom }) {
         <span className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold ${st === 'done' ? 'bg-leaf/10 text-leaf' : st === 'progress' ? 'bg-gold-soft' : 'bg-night/[.05] text-muted'}`}>{st === 'done' ? 'اكتملت' : st === 'progress' ? 'نتعلّمها الآن' : 'لم نبدأ بعد'}</span>
       </div>
       <span className="mt-2 block h-2 overflow-hidden rounded-full bg-night/10"><span className="block h-full rounded-full bg-gold" style={{ width: `${(r.done / r.total) * 100}%` }} /></span>
-      <p className="mb-2 mt-5 text-[12.5px] font-semibold text-muted">رحلة الغرفة</p>
+      <RoomLessons key={r.id} r={r} />
+    </div>
+  )
+}
+
+/** Room journey (each tile is a lesson) + the lesson player. Progress is recorded once per lesson. */
+function RoomLessons({ r }: { r: KidsRoom }) {
+  const st = usePreview()
+  const done = derived(st).lessonsDone
+  const firstOpen = r.lessons.findIndex((l) => !done.has(l.id))
+  const [cur, setCur] = useState(firstOpen < 0 ? 0 : firstOpen)
+  const l = r.lessons[cur]
+  return (
+    <div>
+      <p className="mb-2 mt-5 text-[12.5px] font-semibold text-muted">رحلة الغرفة · اختر درسًا</p>
       <ol className="grid grid-cols-5 gap-1.5" dir="rtl">
-        {r.items.slice(0, 15).map((it, i) => {
-          const s = i < r.done ? 'done' : i === r.done ? 'next' : 'todo'
+        {r.lessons.map((it, i) => {
+          const s = done.has(it.id) ? 'done' : i === cur ? 'next' : 'todo'
           return (
-            <li key={i} className={`flex aspect-square items-center justify-center rounded-[14px] text-center ${r.id === 'reading' || r.id === 'surahs' ? 'text-[10.5px] leading-tight' : 'text-[20px]'} ${s === 'done' ? 'bg-leaf/12 text-leaf ring-1 ring-leaf/30' : s === 'next' ? 'bg-gold-soft ring-2 ring-gold' : 'bg-night/[.04] text-muted'}`} title={s === 'done' ? 'مكتمل' : s === 'next' ? 'التالي' : 'لم يبدأ'} style={r.id === 'letters' || r.id === 'harakat' || r.id === 'joining' ? { fontFamily: "'Amiri'" } : undefined}>
-              {it}
+            <li key={it.id}>
+              <button type="button" onClick={() => setCur(i)} aria-pressed={i === cur} aria-label={`${it.label}${s === 'done' ? '، مكتمل' : ''}`} data-lesson={it.id} data-done={s === 'done'} className={`press flex aspect-square w-full items-center justify-center rounded-[14px] text-center ${r.id === 'reading' || r.id === 'surahs' ? 'text-[10.5px] leading-tight' : 'text-[20px]'} ${s === 'done' ? 'bg-leaf/12 text-leaf ring-1 ring-leaf/30' : 'bg-night/[.04] text-muted'} ${i === cur ? 'ring-2 ring-gold' : ''}`} style={r.id === 'letters' || r.id === 'harakat' || r.id === 'joining' ? { fontFamily: "'Amiri'" } : undefined}>
+                {it.label}
+              </button>
             </li>
           )
         })}
       </ol>
-      {r.items.length > 15 && <p className="mt-2 text-[12px] text-muted">و{toAr(r.items.length - 15)} أخرى</p>}
       <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-muted">
         <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-leaf" />مكتمل</span>
-        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-gold" />التالي</span>
-        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-line" />لم يبدأ</span>
+        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-gold" />المختار</span>
       </div>
-      <a href={ROUTE[r.id]} target="_blank" rel="noreferrer" className="press mt-5 flex h-12 items-center justify-center gap-2 rounded-2xl bg-night text-[14px] font-semibold text-parchment">
-        {st === 'idle' ? 'ابدأ الدرس' : 'تابع الدرس'}
-        <Icon name="chevron" size={16} className="rotate-180" />
-      </a>
-      <p className="mt-2 text-center text-[11px] text-muted">يفتح الدرس الحالي في قسم الأطفال كما هو</p>
+      <div className="mt-4 rounded-[22px] bg-kid-2/50 p-4" data-player={l.id}>
+        <Player key={l.id} room={r.id} index={cur} id={l.id} done={done.has(l.id)} onNext={() => setCur((c) => Math.min(r.lessons.length - 1, c + 1))} last={cur === r.lessons.length - 1} />
+      </div>
+    </div>
+  )
+}
+
+function Player({ room, index, id, done, onNext, last }: { room: KidsRoom['id']; index: number; id: string; done: boolean; onNext: () => void; last: boolean }) {
+  const [msg, setMsg] = useState<string | null>(null)
+  const [won, setWon] = useState(false)
+  const finish = () => {
+    if (won) return
+    setWon(true)
+    // The store ignores a second completion of the same lesson; no duplicate stars.
+    const fresh = actions.completeLesson(id)
+    setMsg(fresh ? 'أحسنت! نلت نجمة' : 'أحسنت! أتممت هذا الدرس من قبل، ونجمته محفوظة لك.')
+  }
+  const footer = (
+    <div className="mt-3 flex items-center gap-2">
+      <p className="flex-1 text-[12.5px] font-semibold" role="status" data-player-msg>{msg ?? (done ? 'أتممت هذا الدرس · يمكنك التدرّب مرة أخرى' : '')}</p>
+      {(won || done) && !last && <button type="button" onClick={onNext} className="press h-9 rounded-full bg-night px-4 text-[12.5px] font-semibold text-parchment">الدرس التالي</button>}
+    </div>
+  )
+  if (room === 'letters' || room === 'harakat') {
+    const pool = room === 'letters' ? LETTERS.map((x) => ({ show: x.ch, name: x.name })) : HARAKAT.map((h) => ({ show: `ب${h.mark}`, name: h.ar }))
+    const q = pool[index]
+    const opts = [index, (index + 3) % pool.length, (index + 7) % pool.length].filter((v, i, xs) => xs.indexOf(v) === i).sort((a, b) => ((a * 5) % 7) - ((b * 5) % 7))
+    return (
+      <div>
+        <p className="text-[14px] font-semibold">{room === 'letters' ? <>أين حرف «{q.name}»؟</> : <>ما اسم هذه الحركة؟ <span className="text-[28px]" style={{ fontFamily: "'Amiri'" }}>{q.show}</span></>}</p>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {opts.map((o) => (
+            <button key={o} type="button" disabled={won} onClick={() => (o === index ? finish() : setMsg('حاول مرة أخرى، أنت قريب!'))} data-opt={o === index ? 'right' : 'wrong'} className={`press h-16 rounded-[18px] bg-card ring-1 ring-line ${room === 'letters' ? 'text-[30px]' : 'text-[14px] font-semibold'} ${won && o === index ? 'bg-leaf/15 ring-leaf' : ''}`} style={room === 'letters' ? { fontFamily: "'Amiri'" } : undefined}>
+              {room === 'letters' ? pool[o].show : pool[o].name}
+            </button>
+          ))}
+        </div>
+        {footer}
+      </div>
+    )
+  }
+  if (room === 'joining') return <JoinPlayer word={JOIN_WORDS[index]} won={won} onWin={finish} footer={footer} />
+  if (room === 'reading') return <ReadPlayer items={READING_LESSONS[index].items} title={READING_LESSONS[index].ar} won={won} onWin={finish} footer={footer} />
+  return <SurahPlayer n={Number(id.split(':')[1])} won={won} onWin={finish} footer={footer} />
+}
+
+function JoinPlayer({ word, won, onWin, footer }: { word: (typeof JOIN_WORDS)[number]; won: boolean; onWin: () => void; footer: ReactNode }) {
+  const tiles = useMemo(() => word.letters.map((ch, i) => ({ ch, i })).sort((a, b) => ((a.i * 7 + 3) % 5) - ((b.i * 7 + 3) % 5)), [word])
+  const [picked, setPicked] = useState<number[]>([])
+  const [hint, setHint] = useState('')
+  const tap = (i: number) => {
+    if (won || picked.includes(i)) return
+    if (word.letters[picked.length] !== word.letters[i]) return setHint('ليس هذا الحرف، جرّب حرفًا آخر')
+    const next = [...picked, i]
+    setPicked(next)
+    setHint('')
+    if (next.length === word.letters.length) onWin()
+  }
+  return (
+    <div>
+      <p className="text-[14px] font-semibold">صِل الحروف لتكتب: «{word.meaning[0]}»</p>
+      <p className="mt-2 min-h-12 rounded-[16px] bg-card px-3 py-2 text-center text-[30px]" style={{ fontFamily: "'Amiri'" }} data-built>{picked.map((i) => word.letters[i]).join('') || '…'}</p>
+      <div className="mt-2 flex justify-center gap-2">
+        {tiles.map((t) => <button key={t.i} type="button" disabled={won || picked.includes(t.i)} onClick={() => tap(t.i)} className="press h-14 w-14 rounded-[16px] bg-card text-[26px] ring-1 ring-line disabled:opacity-30" style={{ fontFamily: "'Amiri'" }} data-tile>{t.ch}</button>)}
+      </div>
+      {hint && <p className="mt-2 text-center text-[12px] text-muted">{hint}</p>}
+      {!won && picked.length > 0 && <button type="button" onClick={() => setPicked([])} className="press mx-auto mt-2 block text-[12px] text-muted underline">ابدأ الكلمة من جديد</button>}
+      {footer}
+    </div>
+  )
+}
+
+function ReadPlayer({ items, title, won, onWin, footer }: { items: string[]; title: string; won: boolean; onWin: () => void; footer: ReactNode }) {
+  const [read, setRead] = useState<Record<number, true>>({})
+  const all = Object.keys(read).length === items.length
+  return (
+    <div>
+      <p className="text-[14px] font-semibold">{title}: اقرأ كل بطاقة بصوت عالٍ ثم المسها</p>
+      <div className="mt-3 flex flex-wrap justify-center gap-2">
+        {items.map((it, i) => <button key={i} type="button" onClick={() => setRead((x) => ({ ...x, [i]: true }))} aria-pressed={!!read[i]} className={`press min-w-14 rounded-[14px] px-3 py-2 text-[24px] ring-1 ${read[i] ? 'bg-leaf/15 ring-leaf' : 'bg-card ring-line'}`} style={{ fontFamily: "'Amiri'" }} data-read-item>{it}</button>)}
+      </div>
+      <button type="button" disabled={!all || won} onClick={onWin} className="press mt-3 h-11 w-full rounded-full bg-night text-[13px] font-semibold text-parchment disabled:opacity-40" data-read-done>{all ? 'أتممت الدرس' : `بقي ${toAr(items.length - Object.keys(read).length)}`}</button>
+      {footer}
+    </div>
+  )
+}
+
+function SurahPlayer({ n, won, onWin, footer }: { n: number; won: boolean; onWin: () => void; footer: ReactNode }) {
+  const [sure, setSure] = useState(false)
+  return (
+    <div>
+      <p className="text-[14px] font-semibold">سورة {surah(n).ar}</p>
+      <p className="mt-1 text-[12.5px] text-muted">استمع وكرّر مع وليّ أمرك. تُحسب السورة محفوظة فقط حين يؤكّد وليّ الأمر أنها أُتقنت.</p>
+      <label className="mt-3 flex items-center gap-2 rounded-[14px] bg-card p-3 text-[13px]">
+        <input type="checkbox" checked={sure} disabled={won} onChange={(e) => setSure(e.target.checked)} className="h-4 w-4 accent-[var(--color-gold)]" data-parent-confirm />
+        أؤكّد (وليّ الأمر) أن طفلي أتقن سورة {surah(n).ar}
+      </label>
+      <button type="button" disabled={!sure || won} onClick={onWin} className="press mt-3 h-11 w-full rounded-full bg-night text-[13px] font-semibold text-parchment disabled:opacity-40" data-surah-done>سجّل السورة محفوظة</button>
+      {footer}
     </div>
   )
 }
