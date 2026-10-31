@@ -73,6 +73,18 @@ the verse that was actually recited.
   were only shown to stay quiet or flag configuration mismatches on correct audio.
 - Teacher agreement, live streaming feedback, passages over 45 s, on-device Muaalem.
 
+### Integration limits (Design Studio recitation preview)
+
+- Recording limit: `server.py` rejects audio over `MUAALEM_MAX_SECONDS` (default 30 s) and
+  reports it as `max_audio_seconds` on `/health`. The preview reads that value when the engine
+  is reachable, falls back to 30 s otherwise, and stops recording just under the limit, so a
+  learner is never allowed to record a clip the server will reject.
+- The preview labels every automated result as an unverified experimental observation and shows
+  no correctness scores for makharij or tajweed, because none of those categories were tested above.
+- The Vite dev bridge only autostarts the service when the Python install exists and at least
+  `MUAALEM_MIN_FREE_MB` (default 3600 MB) is free, given the ~3.3 GB peak RSS above. It is a
+  local development service, not a production inference backend; the published app shows "offline".
+
 ## Part 2: protocol for the real benchmark (to run with a teacher partner)
 
 **Consent & data**

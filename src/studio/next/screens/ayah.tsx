@@ -1,50 +1,70 @@
 // رحلة الحفظ — Memorization Journey (design preview). Real KFGQPC Hafs text and real
 // recitation audio; Tafsir is fetched verbatim via lib/tafsir with its source.
-// All progress lives in local preview state only.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+// The active passage, current ayah, results, reflections, bookmarks and linked
+// similarities come from the shared preview session (../session), so the Desktop
+// and Mobile frames show one session. Nothing is written to the app store.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Chrome, Demo, Icon, Placeholder, toAr, useDevice, useProto } from '../core'
-import { JOURNEY } from '../data'
-import { RECITERS, ayahAudioUrl, firstLetter, hizbOf, juzOf, loadMushaf, pageOf, surah, words } from '../../../lib/quran'
+import { RECITERS, SURAHS, ayahAudioUrl, firstLetter, hizbOf, juzOf, loadMushaf, pageOf, surah, words } from '../../../lib/quran'
 import { TAFSIRS, loadTafsir, type TafsirText } from '../../../lib/tafsir'
+import { DEMO_PASSAGE, MAX_PASSAGE, akey, isDemoPassage, pairsForPassage, passageAyat, useSession, validatePassage, type MemResult, type PanelId, type Passage } from '../session'
+import { RevisionRecall, SimilarPanel } from './similarPanel'
 
-type Intent = 'hifz' | 'tadabbur' | 'both'
-type Panel = 'read' | 'understand' | 'memorize' | 'connect'
-type MemResult = 'mastered' | 'shaky' | 'forgot'
-type Progress = { mem: Record<number, MemResult>; notes: Record<number, string> }
+type Panel = PanelId
+const pkeyOf = (p: Passage) => `${p.s}:${p.from}-${p.to}`
 
-function useAyat() {
-  const [ayat, setAyat] = useState<string[] | null>(null)
-  const [hafs, setHafs] = useState(true)
+/** Exact text of the active passage with explicit loading / ready / error states; a stale passage never shows. */
+function useAyat(p: Passage) {
+  const key = pkeyOf(p)
+  const [st, setSt] = useState<{ key: string; status: 'loading' | 'ready' | 'error'; ayat: string[]; hafs: boolean }>({ key, status: 'loading', ayat: [], hafs: true })
+  const [attempt, setAttempt] = useState(0)
   useEffect(() => {
-    loadMushaf(JOURNEY.s).then((r) => (setAyat(r.ayat.slice(JOURNEY.from - 1, JOURNEY.to)), setHafs(r.hafs)))
-  }, [])
-  return { ayat, hafs }
+    let live = true
+    setSt({ key, status: 'loading', ayat: [], hafs: true })
+    // Never leave a skeleton up indefinitely: a stalled request turns into the retry state.
+    const timer = setTimeout(() => live && setSt((x) => (x.key === key && x.status === 'loading' ? { ...x, status: 'error' } : x)), 15000)
+    loadMushaf(p.s)
+      .then(
+        (r) => live && setSt({ key, status: 'ready', ayat: r.ayat.slice(p.from - 1, p.to), hafs: r.hafs }),
+        () => live && setSt({ key, status: 'error', ayat: [], hafs: true }),
+      )
+      .finally(() => clearTimeout(timer))
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [key, attempt]) // eslint-disable-line react-hooks/exhaustive-deps
+  const cur = st.key === key ? st : { key, status: 'loading' as const, ayat: [] as string[], hafs: true }
+  return { ...cur, retry: () => setAttempt((n) => n + 1) }
 }
 
-/** Real recitation (EveryAyah) for one ayah, with repeat count. */
-function useAudio() {
+/** Real recitation (EveryAyah) for one ayah of the active surah, with repeat count. */
+function useAudio(s: number) {
   const el = useRef<HTMLAudioElement | null>(null)
   const [st, setSt] = useState<{ a: number | null; t: number; busy: boolean; left: number }>({ a: null, t: 0, busy: false, left: 0 })
+  const idle = { a: null, t: 0, busy: false, left: 0 }
   useEffect(() => () => el.current?.pause(), [])
+  // A new surah stops whatever was playing from the old passage.
+  useEffect(() => () => (el.current?.pause(), setSt(idle)), [s]) // eslint-disable-line react-hooks/exhaustive-deps
   const play = (a: number, times = 1) => {
     if (!el.current) el.current = new Audio()
     const au = el.current
     au.pause()
-    au.src = ayahAudioUrl(RECITERS[0].id, JOURNEY.s, a)
+    au.src = ayahAudioUrl(RECITERS[0].id, s, a)
     let left = times
     au.ontimeupdate = () => setSt((x) => ({ ...x, t: au.duration ? au.currentTime / au.duration : 0 }))
     au.onwaiting = () => setSt((x) => ({ ...x, busy: true }))
     au.onplaying = () => setSt((x) => ({ ...x, busy: false }))
     au.onended = () => {
       left -= 1
-      if (left > 0) (au.currentTime = 0, void au.play(), setSt((x) => ({ ...x, left })))
-      else setSt({ a: null, t: 0, busy: false, left: 0 })
+      if (left > 0) (au.currentTime = 0, au.play().catch(() => setSt(idle)), setSt((x) => ({ ...x, left })))
+      else setSt(idle)
     }
-    au.onerror = () => setSt({ a: null, t: 0, busy: false, left: 0 })
+    au.onerror = () => setSt(idle)
     setSt({ a, t: 0, busy: true, left: times })
-    au.play().catch(() => setSt({ a: null, t: 0, busy: false, left: 0 }))
+    au.play().catch(() => setSt(idle))
   }
-  const stop = () => (el.current?.pause(), setSt({ a: null, t: 0, busy: false, left: 0 }))
+  const stop = () => (el.current?.pause(), setSt(idle))
   return { ...st, play, stop }
 }
 type Audio = ReturnType<typeof useAudio>
@@ -58,131 +78,217 @@ const textSize = (t: string, desktop: boolean) => {
 export function AyahJourney() {
   const device = useDevice()
   const { go } = useProto()
-  const { ayat, hafs } = useAyat()
-  const audio = useAudio()
-  const [intent, setIntent] = useState<Intent>('both')
-  const [cur, setCur] = useState(JOURNEY.from)
-  const [panel, setPanel] = useState<Panel | null>(device === 'desktop' ? 'understand' : null)
-  const [prog, setProg] = useState<Progress>({ mem: {}, notes: {} })
-  const feed = useRef<HTMLDivElement>(null)
-
-  // Track the ayah snapped into view.
+  const ses = useSession()
+  const { passage: p, cur, intent, nonce } = ses.s
+  const pkey = pkeyOf(p)
+  const text = useAyat(p)
+  const audio = useAudio(p.s)
+  // Coming back from the Mushaf / extended search reopens the panel the user left from.
+  const [panel, setPanel] = useState<Panel | null>(() => ses.s.away?.panel ?? (device === 'desktop' ? 'understand' : null))
+  const [picker, setPicker] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
   useEffect(() => {
-    const root = feed.current
-    if (!root || !ayat) return
-    const io = new IntersectionObserver((es) => es.forEach((e) => e.isIntersecting && setCur(Number((e.target as HTMLElement).dataset.a))), { root, threshold: 0.6 })
-    root.querySelectorAll('[data-a]').forEach((n) => io.observe(n))
-    return () => io.disconnect()
-  }, [ayat])
-  const scrollTo = (a: number) => feed.current?.querySelector(`[data-a="${a}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (ses.s.away) ses.setAway(null)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 2600)
+    return () => clearTimeout(t)
+  }, [toast])
 
-  const panels: { id: Panel; ar: string; icon: string }[] = [
-    { id: 'read', ar: 'اقرأ واستمع', icon: 'volume' },
-    ...(intent !== 'hifz' ? [{ id: 'understand' as const, ar: 'افهم وتدبّر', icon: 'tafsir' }] : []),
-    ...(intent !== 'tadabbur' ? [{ id: 'memorize' as const, ar: 'احفظ', icon: 'sprout' }] : []),
-    { id: 'connect', ar: 'اربط الآيات', icon: 'layers' },
+  // ---- Feed ↔ shared current ayah. The frame that the user scrolls drives `cur`;
+  // the other frame follows with an instant jump, ignoring its own observer meanwhile.
+  const feed = useRef<HTMLDivElement>(null)
+  const quiet = useRef(0)
+  const shown = useRef<number | null>(null)
+  const sesRef = useRef(ses)
+  sesRef.current = ses
+  const jump = (a: number, smooth = false) => {
+    const root = feed.current
+    if (!root) return
+    quiet.current = Date.now() + (smooth ? 800 : 200)
+    shown.current = a
+    root.scrollTo({ top: (a - p.from) * root.clientHeight, behavior: smooth ? 'smooth' : 'auto' })
+  }
+  useLayoutEffect(() => {
+    const root = feed.current
+    if (!root || text.status !== 'ready') return
+    jump(sesRef.current.s.cur)
+    let later: ReturnType<typeof setTimeout> | undefined
+    // The slide actually in view decides; scrolls during a programmatic jump are reconciled right after it.
+    const reconcile = () => {
+      const wait = quiet.current - Date.now()
+      if (wait > 0) return (clearTimeout(later), (later = setTimeout(reconcile, wait + 40)))
+      const a = p.from + Math.round(root.scrollTop / Math.max(1, root.clientHeight))
+      shown.current = a
+      sesRef.current.setCur(a)
+    }
+    const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && reconcile(), { root, threshold: 0.6 })
+    root.querySelectorAll('[data-a]').forEach((n) => io.observe(n))
+    return () => (io.disconnect(), clearTimeout(later))
+  }, [text.status, pkey]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    if (text.status === 'ready' && shown.current !== cur) jump(cur)
+  }, [cur, text.status]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pick = (a: number) => (ses.setCur(a), jump(a, true))
+
+  const linked = pairsForPassage(p, ses.s.pairs)
+  const panels: { id: Panel; ar: string; short: string; icon: string }[] = [
+    { id: 'read', ar: 'اقرأ واستمع', short: 'اقرأ واستمع', icon: 'volume' },
+    ...(intent !== 'hifz' ? [{ id: 'understand' as const, ar: 'افهم وتدبّر', short: 'افهم وتدبّر', icon: 'tafsir' }] : []),
+    ...(intent !== 'tadabbur' ? [{ id: 'memorize' as const, ar: 'احفظ', short: 'احفظ', icon: 'sprout' }] : []),
+    { id: 'connect', ar: 'اربط الآيات', short: 'اربط الآيات', icon: 'layers' },
+    { id: 'similar', ar: 'متشابهات هذا المقطع', short: 'المتشابهات', icon: 'copy' },
   ]
-  const text = ayat?.[cur - JOURNEY.from] ?? ''
-  const panelBody = (p: Panel) =>
-    p === 'read' ? <ReadPanel a={cur} text={text} hafs={hafs} audio={audio} /> : p === 'understand' ? <UnderstandPanel key={cur} a={cur} text={text} note={prog.notes[cur] ?? ''} onSave={(t) => setProg((x) => ({ ...x, notes: { ...x.notes, [cur]: t } }))} /> : p === 'memorize' ? <MemorizePanel key={cur} a={cur} text={text} hafs={hafs} audio={audio} onResult={(r) => setProg((x) => ({ ...x, mem: { ...x.mem, [cur]: r } }))} result={prog.mem[cur]} /> : <ConnectPanel ayat={ayat ?? []} hafs={hafs} prog={prog} />
+  const ready = text.status === 'ready'
+  const curText = ready ? (text.ayat[cur - p.from] ?? '') : ''
+  const panelBody = (id: Panel) =>
+    !ready && id !== 'similar' ? (
+      <LoadState status={text.status} retry={text.retry} />
+    ) : id === 'read' ? (
+      <ReadPanel p={p} a={cur} text={curText} hafs={text.hafs} audio={audio} />
+    ) : id === 'understand' ? (
+      <UnderstandPanel key={`${pkey}:${cur}`} p={p} a={cur} text={curText} note={ses.s.notes[akey(p.s, cur)] ?? ''} onSave={(t) => ses.setNote(cur, t)} />
+    ) : id === 'memorize' ? (
+      <MemorizePanel key={`${pkey}:${cur}`} a={cur} text={curText} hafs={text.hafs} audio={audio} onResult={(r) => ses.setMem(cur, r)} result={ses.s.mem[akey(p.s, cur)]} />
+    ) : id === 'connect' ? (
+      <ConnectPanel key={nonce} p={p} ayat={text.ayat} hafs={text.hafs} />
+    ) : (
+      <SimilarPanel key={nonce} />
+    )
+  const activePanel = (fallback: Panel) => (panel && panels.some((x) => x.id === panel) ? panel : fallback)
 
   const intentSwitch = (
     <div role="radiogroup" aria-label="نيّة الجلسة" className="inline-flex rounded-full bg-night/[.06] p-1 text-[12.5px]">
       {([['hifz', 'حفظ فقط'], ['tadabbur', 'تدبّر فقط'], ['both', 'حفظ + تدبّر']] as const).map(([k, l]) => (
-        <button key={k} type="button" role="radio" aria-checked={intent === k} onClick={() => (setIntent(k), panel && !['read', 'connect'].includes(panel) && setPanel(k === 'hifz' ? 'memorize' : k === 'tadabbur' ? 'understand' : panel))} className={`press h-8 rounded-full px-3 ${intent === k ? 'bg-card font-semibold shadow-[0_1px_3px_rgba(0,0,0,.12)]' : 'text-muted'}`}>{l}</button>
+        <button key={k} type="button" role="radio" aria-checked={intent === k} onClick={() => (ses.setIntent(k), panel && !['read', 'connect', 'similar'].includes(panel) && setPanel(k === 'hifz' ? 'memorize' : k === 'tadabbur' ? 'understand' : panel))} className={`press h-8 rounded-full px-3 ${intent === k ? 'bg-card font-semibold shadow-[0_1px_3px_rgba(0,0,0,.12)]' : 'text-muted'}`}>{l}</button>
       ))}
     </div>
   )
 
-  const slides = (ayat ?? Array.from({ length: 5 }, () => '')).map((t, i) => {
-    const a = JOURNEY.from + i
-    return (
-      <section key={a} data-a={a} className={`relative flex snap-start snap-always flex-col ${device === 'desktop' ? 'h-full justify-center px-10' : 'h-full px-6 pb-36 pt-28'}`} aria-label={`الآية ${a}`}>
-        <div className="flex flex-1 flex-col justify-center">
-          <p className="mb-6 text-center text-[12.5px] text-muted">
-            سورة {surah(JOURNEY.s).ar} · الآية {toAr(a)} <span className="mx-1 text-line">|</span> الجزء {toAr(juzOf(JOURNEY.s, a))} · ص {toAr(pageOf(JOURNEY.s, a))}
-          </p>
-          {t ? (
-            <p className={`mf-text ${hafs ? '' : 'tanzil'} text-center`} style={{ fontSize: textSize(t, device === 'desktop'), lineHeight: 2.05, textAlignLast: 'center', color: 'var(--color-night)' }}>
+  const slideCls = `relative flex snap-start snap-always flex-col ${device === 'desktop' ? 'h-full justify-center px-10' : 'h-full px-6 pb-36 pt-28'}`
+  const slides = ready ? (
+    text.ayat.map((t, i) => {
+      const a = p.from + i
+      const k = akey(p.s, a)
+      const r = ses.s.mem[k]
+      const sims = linked.filter((x) => x.mine.a === a).length
+      return (
+        <section key={`${pkey}:${a}`} data-a={a} className={slideCls} aria-label={`الآية ${a}`}>
+          <div className="flex flex-1 flex-col justify-center">
+            <p className="mb-6 text-center text-[12.5px] text-muted">
+              سورة {surah(p.s).ar} · الآية {toAr(a)} <span className="mx-1 text-line">|</span> الجزء {toAr(juzOf(p.s, a))} · ص {toAr(pageOf(p.s, a))}
+              {ses.s.marks[k] && <Icon name="bookmark" size={13} fill className="ms-1.5 inline text-leaf" />}
+            </p>
+            <p className={`mf-text ${text.hafs ? '' : 'tanzil'} text-center`} style={{ fontSize: textSize(t, device === 'desktop'), lineHeight: 2.05, textAlignLast: 'center', color: 'var(--color-night)' }}>
               {t} <span className="mf-num">{toAr(a)}</span>
             </p>
-          ) : (
-            <div className="mx-auto h-24 w-4/5 animate-pulse rounded-3xl bg-night/5" />
-          )}
-          <div className="mt-7 flex flex-wrap justify-center gap-2">
-            <StateChip icon="sprout" label="الحفظ" value={memLabel(prog.mem[a])} tone={prog.mem[a] === 'mastered' ? 'leaf' : prog.mem[a] ? 'gold' : 'none'} />
-            <StateChip icon="note" label="التدبّر" value={prog.notes[a] ? 'تأمّل محفوظ' : 'لا تأمّل بعد'} tone={prog.notes[a] ? 'gold' : 'none'} />
+            <div className="mt-7 flex flex-wrap justify-center gap-2">
+              <StateChip icon="sprout" label="الحفظ" value={memLabel(r)} tone={r === 'mastered' ? 'leaf' : r ? 'gold' : 'none'} />
+              <StateChip icon="note" label="التدبّر" value={ses.s.notes[k] ? 'تأمّل محفوظ' : 'لا تأمّل بعد'} tone={ses.s.notes[k] ? 'gold' : 'none'} />
+              {sims > 0 && (
+                <button type="button" onClick={() => setPanel('similar')} className="press inline-flex items-center gap-1.5 rounded-full bg-sky/10 px-3 py-1.5 text-[12px] text-sky">
+                  <Icon name="copy" size={14} />
+                  <b className="font-semibold">متشابهات مرتبطة:</b> {toAr(sims)}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-        {i === 0 && device === 'mobile' && (
-          <p className="absolute inset-x-0 bottom-28 flex flex-col items-center text-[11.5px] text-muted">
-            <Icon name="chevronDown" size={18} className="animate-bounce" />
-            اسحب للآية التالية
-          </p>
-        )}
-      </section>
-    )
-  })
+          {i === 0 && device === 'mobile' && text.ayat.length > 1 && (
+            <p className="absolute inset-x-0 bottom-28 flex flex-col items-center text-[11.5px] text-muted">
+              <Icon name="chevronDown" size={18} className="animate-bounce" />
+              اسحب للآية التالية
+            </p>
+          )}
+        </section>
+      )
+    })
+  ) : (
+    <section className={slideCls} aria-busy={text.status === 'loading'}>
+      <div className="flex flex-1 flex-col justify-center">
+        <LoadState status={text.status} retry={text.retry} big />
+      </div>
+    </section>
+  )
+
+  const passageLabel = (
+    <>
+      سورة {surah(p.s).ar} · {p.from === p.to ? `الآية ${toAr(p.from)}` : `الآيات ${toAr(p.from)}–${toAr(p.to)}`}
+    </>
+  )
+  const pickerEl = picker && <PassagePicker onClose={() => setPicker(false)} />
 
   if (device === 'desktop')
     return (
       <Chrome>
-        <div className="flex h-full">
+        <div className="relative flex h-full">
           <div className="relative flex min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-3 border-b border-line/60 px-8 py-4">
               <div className="min-w-0 flex-1">
                 <p className="font-arabic-display text-[19px] font-bold">رحلة الحفظ</p>
-                <p className="text-[12.5px] text-muted">سورة {surah(JOURNEY.s).ar} · الآيات {toAr(JOURNEY.from)}–{toAr(JOURNEY.to)}</p>
+                <p className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted" data-passage-label>
+                  {passageLabel}
+                  {isDemoPassage(p) && <Demo>مقطع تجريبي</Demo>}
+                  <button type="button" onClick={() => setPicker(true)} className="press inline-flex h-7 items-center gap-1 rounded-full bg-gold-soft px-2.5 text-[12px] font-semibold text-night" data-open-picker>
+                    <Icon name="book" size={13} />اختيار مقطع الحفظ
+                  </button>
+                </p>
               </div>
               {intentSwitch}
             </div>
             <div className="relative min-h-0 flex-1">
-              <div ref={feed} className="no-scrollbar h-full snap-y snap-mandatory overflow-y-auto">{slides}</div>
-              <Dots cur={cur} onPick={scrollTo} />
+              <div ref={feed} className="no-scrollbar h-full snap-y snap-mandatory overflow-y-auto" data-feed>{slides}</div>
+              {ready && <Dots p={p} cur={cur} onPick={pick} />}
             </div>
             <AudioBar a={cur} audio={audio} />
           </div>
           <aside className="flex w-[440px] shrink-0 flex-col border-s border-line/60 bg-card/50">
             <div className="flex gap-1 border-b border-line/60 p-3" role="tablist">
-              {panels.map((p) => (
-                <button key={p.id} type="button" role="tab" aria-selected={panel === p.id} onClick={() => setPanel(p.id)} className={`press flex flex-1 flex-col items-center gap-1 rounded-[14px] py-2 text-[12px] ${panel === p.id ? 'bg-gold-soft font-semibold text-night' : 'text-muted hover:bg-night/5'}`}>
-                  <Icon name={p.icon} size={18} />
-                  {p.ar}
+              {panels.map((x) => (
+                <button key={x.id} type="button" role="tab" aria-selected={activePanel(panels[0].id) === x.id} onClick={() => setPanel(x.id)} className={`press flex flex-1 flex-col items-center gap-1 rounded-[14px] py-2 text-[11.5px] ${activePanel(panels[0].id) === x.id ? 'bg-gold-soft font-semibold text-night' : 'text-muted hover:bg-night/5'}`}>
+                  <Icon name={x.icon} size={18} />
+                  {x.short}
                 </button>
               ))}
             </div>
-            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto p-6">{panelBody(panel && panels.some((x) => x.id === panel) ? panel : panels[0].id)}</div>
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto p-6">{panelBody(activePanel(panels[0].id))}</div>
           </aside>
+          {pickerEl}
         </div>
       </Chrome>
     )
 
+  const marked = !!ses.s.marks[akey(p.s, cur)]
   return (
     <Chrome bare dock={false}>
       <div className="relative h-full">
-        <div ref={feed} className="no-scrollbar h-full snap-y snap-mandatory overflow-y-auto">{slides}</div>
+        <div ref={feed} className="no-scrollbar h-full snap-y snap-mandatory overflow-y-auto" data-feed>{slides}</div>
         <div className="glass-panel absolute inset-x-0 top-0 z-30 flex flex-col items-center gap-2 px-4 pb-3 pt-12" style={{ borderRadius: 0 }}>
           <div className="flex w-full items-center">
             <button type="button" onClick={() => go('home')} aria-label="رجوع" className="press flex h-10 w-10 items-center justify-center rounded-full hover:bg-night/5"><Icon name="back" className="rotate-180" /></button>
-            <p className="flex-1 text-center text-[15px] font-semibold">رحلة الحفظ · {surah(JOURNEY.s).ar}</p>
+            <button type="button" onClick={() => setPicker(true)} aria-label="اختيار مقطع الحفظ" className="press flex min-w-0 flex-1 flex-col items-center rounded-2xl py-0.5" data-open-picker>
+              <span className="text-[15px] font-semibold">رحلة الحفظ</span>
+              <span className="flex items-center gap-1 text-[11.5px] text-muted" data-passage-label>{passageLabel}<Icon name="chevronDown" size={13} /></span>
+            </button>
             <span className="w-10" />
           </div>
           {intentSwitch}
         </div>
-        <Dots cur={cur} onPick={scrollTo} />
+        {ready && <Dots p={p} cur={cur} onPick={pick} />}
         {/* Action rail */}
         <div className="absolute bottom-36 end-3 z-30 flex flex-col gap-3">
-          {panels.filter((p) => p.id !== 'read').map((p) => (
-            <button key={p.id} type="button" onClick={() => setPanel(p.id)} className="press flex flex-col items-center gap-1 text-[10.5px] font-medium text-night/80">
-              <span className="glass-panel flex h-12 w-12 items-center justify-center rounded-full"><Icon name={p.icon} size={20} /></span>
-              {p.ar.split(' ')[0]}
+          {panels.filter((x) => x.id !== 'read').map((x) => (
+            <button key={x.id} type="button" onClick={() => setPanel(x.id)} className="press flex flex-col items-center gap-1 text-[10.5px] font-medium text-night/80">
+              <span className="glass-panel flex h-12 w-12 items-center justify-center rounded-full"><Icon name={x.icon} size={20} /></span>
+              {x.id === 'similar' ? 'متشابهات' : x.ar.split(' ')[0]}
             </button>
           ))}
-          <button type="button" className="press flex flex-col items-center gap-1 text-[10.5px] font-medium text-night/80">
-            <span className="glass-panel flex h-12 w-12 items-center justify-center rounded-full"><Icon name="bookmark" size={20} /></span>
-            علامة
+          <button type="button" disabled={!ready} onClick={() => (ses.toggleMark(cur), setToast(marked ? 'أُزيلت العلامة' : 'وُضعت علامة · في المعاينة فقط، لا تُحفظ في حسابك'))} aria-pressed={marked} aria-label={marked ? `إزالة العلامة عن الآية ${cur}` : `وضع علامة على الآية ${cur} (معاينة فقط)`} className="press flex flex-col items-center gap-1 text-[10.5px] font-medium text-night/80 disabled:opacity-40" data-bookmark>
+            <span className={`glass-panel flex h-12 w-12 items-center justify-center rounded-full ${marked ? 'text-leaf' : ''}`}><Icon name="bookmark" size={20} fill={marked} /></span>
+            {marked ? 'إزالة' : 'علامة'}
           </button>
         </div>
+        {toast && <p role="status" className="absolute inset-x-6 top-[150px] z-40 rounded-full bg-night px-4 py-2 text-center text-[12px] text-parchment">{toast}</p>}
         <div className="absolute inset-x-0 bottom-0 z-30 px-3 pb-7"><AudioBar a={cur} audio={audio} floating /></div>
         {panel && (
           <>
@@ -190,19 +296,86 @@ export function AyahJourney() {
             <div className="absolute inset-x-0 bottom-0 z-50 flex h-[80%] flex-col rounded-t-[30px] bg-parchment shadow-[0_-20px_50px_-20px_rgba(0,0,0,.4)]">
               <span className="mx-auto mt-2.5 block h-[5px] w-10 rounded-full bg-night/15" />
               <div className="no-scrollbar flex gap-1 overflow-x-auto px-4 pt-3" role="tablist">
-                {panels.map((p) => (
-                  <button key={p.id} type="button" role="tab" aria-selected={panel === p.id} onClick={() => setPanel(p.id)} className={`press flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-[12.5px] ${panel === p.id ? 'bg-night text-parchment' : 'bg-card text-night/75 ring-1 ring-line'}`}>
-                    <Icon name={p.icon} size={15} />
-                    {p.ar}
+                {panels.map((x) => (
+                  <button key={x.id} type="button" role="tab" aria-selected={activePanel(panel) === x.id} onClick={() => setPanel(x.id)} className={`press flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-[12.5px] ${activePanel(panel) === x.id ? 'bg-night text-parchment' : 'bg-card text-night/75 ring-1 ring-line'}`}>
+                    <Icon name={x.icon} size={15} />
+                    {x.short}
                   </button>
                 ))}
               </div>
-              <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-8 pt-4">{panelBody(panel)}</div>
+              <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-8 pt-4">{panelBody(activePanel(panels[0].id))}</div>
             </div>
           </>
         )}
+        {pickerEl}
       </div>
     </Chrome>
+  )
+}
+
+/** Loading / error state of the passage text, with an Arabic retry. */
+function LoadState({ status, retry, big = false }: { status: 'loading' | 'ready' | 'error'; retry: () => void; big?: boolean }) {
+  if (status === 'error')
+    return (
+      <div role="alert" className="mx-auto max-w-[360px] rounded-[22px] bg-clay/[.07] p-5 text-center ring-1 ring-clay/20" data-load-error>
+        <p className="font-semibold text-clay">تعذّر تحميل نص المقطع</p>
+        <p className="mt-1 text-[12.5px] text-muted">تحقّق من الاتصال ثم أعد المحاولة. لا يُعرض نص غير مكتمل.</p>
+        <button type="button" onClick={retry} className="press mt-3 h-10 rounded-full bg-night px-5 text-[13px] font-semibold text-parchment" data-retry>أعد المحاولة</button>
+      </div>
+    )
+  return (
+    <div role="status" aria-label="جارٍ تحميل نص المقطع" className="space-y-3">
+      <div className={`mx-auto animate-pulse rounded-3xl bg-night/5 ${big ? 'h-24 w-4/5' : 'h-16 w-full'}`} />
+      <p className="text-center text-[12px] text-muted">جارٍ تحميل نص المقطع…</p>
+    </div>
+  )
+}
+
+/** «اختيار مقطع الحفظ» — surah + range, validated against the surah's real ayah count. */
+function PassagePicker({ onClose }: { onClose: () => void }) {
+  const ses = useSession()
+  const [s, setS] = useState(ses.s.passage.s)
+  const [from, setFrom] = useState(String(ses.s.passage.from))
+  const [to, setTo] = useState(String(ses.s.passage.to))
+  const draft = { s, from: Number(from), to: Number(to) }
+  const err = from === '' || to === '' ? 'أدخل آية البداية والنهاية.' : validatePassage(draft)
+  const n = surah(s).ayat
+  const field = 'h-11 rounded-2xl bg-card px-3 text-[14px] ring-1 ring-line outline-none focus:ring-2 focus:ring-gold'
+  const apply = () => {
+    if (err) return
+    ses.setPassage(draft)
+    onClose()
+  }
+  return (
+    <div className="absolute inset-0 z-[60] flex items-end justify-center bg-black/30 sm:items-center" role="dialog" aria-modal="true" aria-label="اختيار مقطع الحفظ" data-picker>
+      <button type="button" aria-label="إغلاق" onClick={onClose} className="absolute inset-0" />
+      <form onSubmit={(e) => (e.preventDefault(), apply())} className="relative m-3 w-full max-w-[440px] rounded-[28px] bg-parchment p-5 shadow-[0_30px_60px_-20px_rgba(0,0,0,.45)]">
+        <p className="font-arabic-display text-[19px] font-bold">اختيار مقطع الحفظ</p>
+        <p className="mt-1 text-[12.5px] text-muted">اختر السورة ومدى الآيات. يبدأ المقطع من آيته الأولى، حتى {toAr(MAX_PASSAGE)} آية في الجلسة.</p>
+        <label className="mt-4 block text-[12px] text-muted">السورة
+          <select aria-label="السورة" value={s} onChange={(e) => { const x = Number(e.target.value); setS(x); setFrom('1'); setTo(String(Math.min(surah(x).ayat, 5))) }} className={`${field} mt-1 w-full`}>
+            {SURAHS.map((x) => <option key={x.n} value={x.n}>{toAr(x.n)}. {x.ar} · {toAr(x.ayat)} آية</option>)}
+          </select>
+        </label>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <label className="text-[12px] text-muted">من الآية
+            <input aria-label="من الآية" inputMode="numeric" type="number" min={1} max={n} value={from} onChange={(e) => setFrom(e.target.value)} className={`${field} mt-1 w-full text-center`} />
+          </label>
+          <label className="text-[12px] text-muted">إلى الآية
+            <input aria-label="إلى الآية" inputMode="numeric" type="number" min={1} max={n} value={to} onChange={(e) => setTo(e.target.value)} className={`${field} mt-1 w-full text-center`} />
+          </label>
+        </div>
+        <p className={`mt-2 min-h-5 text-[12px] ${err ? 'text-clay' : 'text-muted'}`} role={err ? 'alert' : undefined} data-picker-msg>
+          {err ?? `سورة ${surah(s).ar} · ${toAr(n)} آية · ${draft.from === draft.to ? `الآية ${toAr(draft.from)}` : `الآيات ${toAr(draft.from)}–${toAr(draft.to)}`}`}
+        </p>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted">معاينة فقط: تغيير المقطع يبدأ جلسة مؤقّتة جديدة ولا يمسّ سجلات حفظك الحقيقية.</p>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <button type="submit" disabled={!!err} className="press h-11 flex-1 rounded-full bg-night text-[13.5px] font-semibold text-parchment disabled:opacity-40" data-apply>ابدأ هذا المقطع</button>
+          <button type="button" onClick={onClose} className="press h-11 rounded-full px-4 text-[13px] ring-1 ring-line">إلغاء</button>
+        </div>
+        {!isDemoPassage(ses.s.passage) && <button type="button" onClick={() => (ses.setPassage(DEMO_PASSAGE), onClose())} className="press mt-2 text-[12px] text-muted underline">العودة إلى المقطع التجريبي (الملك ١–٥)</button>}
+      </form>
+    </div>
   )
 }
 
@@ -218,10 +391,20 @@ function StateChip({ icon, label, value, tone }: { icon: string; label: string; 
   )
 }
 
-function Dots({ cur, onPick }: { cur: number; onPick: (a: number) => void }) {
+function Dots({ p, cur, onPick }: { p: Passage; cur: number; onPick: (a: number) => void }) {
+  const all = passageAyat(p)
+  if (all.length > 12)
+    return (
+      <div className="absolute start-3 top-1/2 z-20 flex -translate-y-1/2 flex-col items-center gap-1 rounded-full bg-card/80 py-1.5 text-[11px] ring-1 ring-line" aria-label="الآيات">
+        <button type="button" disabled={cur <= p.from} onClick={() => onPick(cur - 1)} aria-label="الآية السابقة" className="press flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-30"><Icon name="chevronDown" size={15} className="rotate-180" /></button>
+        <span className="tabular-nums font-semibold">{toAr(cur)}</span>
+        <span className="text-muted">{toAr(p.to)}</span>
+        <button type="button" disabled={cur >= p.to} onClick={() => onPick(cur + 1)} aria-label="الآية التالية" className="press flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-30"><Icon name="chevronDown" size={15} /></button>
+      </div>
+    )
   return (
     <div className="absolute start-3 top-1/2 z-20 flex -translate-y-1/2 flex-col gap-2" aria-label="الآيات">
-      {Array.from({ length: JOURNEY.to - JOURNEY.from + 1 }, (_, i) => JOURNEY.from + i).map((a) => (
+      {all.map((a) => (
         <button key={a} type="button" onClick={() => onPick(a)} aria-label={`الآية ${a}`} aria-current={a === cur} className={`w-1.5 rounded-full transition-all ${a === cur ? 'h-6 bg-gold' : 'h-1.5 bg-night/20 hover:bg-night/40'}`} />
       ))}
     </div>
@@ -258,10 +441,10 @@ function Block({ title, badge, children, tone = 'card' }: { title: string; badge
   )
 }
 
-function ReadPanel({ a, text, hafs, audio }: { a: number; text: string; hafs: boolean; audio: Audio }) {
+function ReadPanel({ p, a, text, hafs, audio }: { p: Passage; a: number; text: string; hafs: boolean; audio: Audio }) {
   return (
     <div>
-      <Block title={`سورة ${surah(JOURNEY.s).ar} · الآية ${toAr(a)}`} tone="paper">
+      <Block title={`سورة ${surah(p.s).ar} · الآية ${toAr(a)}`} tone="paper">
         <p className={`mf-text ${hafs ? '' : 'tanzil'}`} style={{ fontSize: 26, lineHeight: 2.05 }}>{text} <span className="mf-num">{toAr(a)}</span></p>
       </Block>
       <Block title="الاستماع">
@@ -277,7 +460,7 @@ function ReadPanel({ a, text, hafs, audio }: { a: number; text: string; hafs: bo
   )
 }
 
-function UnderstandPanel({ a, text, note, onSave }: { a: number; text: string; note: string; onSave: (t: string) => void }) {
+function UnderstandPanel({ p, a, text, note, onSave }: { p: Passage; a: number; text: string; note: string; onSave: (t: string) => void }) {
   const [book, setBook] = useState(16)
   const [t, setT] = useState<{ d: TafsirText | null; err: boolean }>({ d: null, err: false })
   const [draft, setDraft] = useState(note)
@@ -285,15 +468,15 @@ function UnderstandPanel({ a, text, note, onSave }: { a: number; text: string; n
   useEffect(() => {
     let live = true
     setT({ d: null, err: false })
-    loadTafsir(book, JOURNEY.s, a)
+    loadTafsir(book, p.s, a)
       .then((d) => live && setT({ d, err: false }))
       .catch(() => live && setT({ d: null, err: true }))
     return () => {
       live = false
     }
-  }, [book, a])
+  }, [book, p.s, a])
   const b = TAFSIRS.find((x) => x.id === book)!
-  const h = hizbOf(JOURNEY.s, a)
+  const h = hizbOf(p.s, a)
   return (
     <div>
       <Block title="التفسير الموثّق" badge={<span className="inline-flex items-center gap-1 rounded-full bg-leaf/10 px-2 py-0.5 text-[10.5px] font-semibold text-leaf"><Icon name="shield" size={12} />مصدر منشور</span>} tone="paper">
@@ -327,7 +510,7 @@ function UnderstandPanel({ a, text, note, onSave }: { a: number; text: string; n
 
       <Block title="سياق الآية">
         <dl className="grid grid-cols-2 gap-2 text-[12.5px]">
-          {[['السورة', `${surah(JOURNEY.s).ar} · ${surah(JOURNEY.s).place === 'makkah' ? 'مكية' : 'مدنية'}`], ['عدد آياتها', toAr(surah(JOURNEY.s).ayat)], ['الموضع', `ص ${toAr(pageOf(JOURNEY.s, a))} · الجزء ${toAr(juzOf(JOURNEY.s, a))}`], ['الحزب', toAr(h.hizb)]].map(([k, v]) => (
+          {[['السورة', `${surah(p.s).ar} · ${surah(p.s).place === 'makkah' ? 'مكية' : 'مدنية'}`], ['عدد آياتها', toAr(surah(p.s).ayat)], ['الموضع', `ص ${toAr(pageOf(p.s, a))} · الجزء ${toAr(juzOf(p.s, a))}`], ['الحزب', toAr(h.hizb)]].map(([k, v]) => (
             <div key={k} className="rounded-2xl bg-night/[.04] px-3 py-2.5"><dt className="text-muted">{k}</dt><dd className="mt-0.5 font-semibold">{v}</dd></div>
           ))}
         </dl>
@@ -428,15 +611,18 @@ function StepRow({ hint, action }: { hint: string; action?: ReactNode }) {
   )
 }
 
-function ConnectPanel({ ayat, hafs, prog }: { ayat: string[]; hafs: boolean; prog: Progress }) {
+function ConnectPanel({ p, ayat, hafs }: { p: Passage; ayat: string[]; hafs: boolean }) {
+  const ses = useSession()
+  const linked = pairsForPassage(p, ses.s.pairs)
   const [tab, setTab] = useState<'chain' | 'next' | 'recite'>('chain')
   const [open, setOpen] = useState<number | null>(null)
   const [q, setQ] = useState(0)
   const [pick, setPick] = useState<number | null>(null)
   const [self, setSelf] = useState<Record<number, boolean>>({})
   const n = ayat.length
-  const mem = Object.entries(prog.mem).filter(([, r]) => r === 'mastered').length
-  const notes = Object.keys(prog.notes).length
+  // Only «أتقنتها» counts; similarity exercises are tracked separately and never appear here.
+  const mem = passageAyat(p).filter((a) => ses.s.mem[akey(p.s, a)] === 'mastered').length
+  const notes = passageAyat(p).filter((a) => ses.s.notes[akey(p.s, a)]).length
   const head = (t: string, k = 3) => words(t).slice(0, k).join(' ')
   const tail = (t: string, k = 3) => words(t).slice(-k).join(' ')
   // "What comes next?" — options are real openings from this passage, in a fixed shuffled order.
@@ -455,7 +641,7 @@ function ConnectPanel({ ayat, hafs, prog }: { ayat: string[]; hafs: boolean; pro
       {tab === 'chain' && (
         <ol className="relative">
           {ayat.map((t, i) => {
-            const a = JOURNEY.from + i
+            const a = p.from + i
             return (
               <li key={a} className="relative pb-4 ps-12">
                 {i < n - 1 && <span className="absolute bottom-0 start-[19px] top-10 w-px bg-gold/40" aria-hidden />}
@@ -464,7 +650,7 @@ function ConnectPanel({ ayat, hafs, prog }: { ayat: string[]; hafs: boolean; pro
                   <p className={`mf-text ${hafs ? '' : 'tanzil'} text-[19px]`} style={{ lineHeight: 1.9, textAlign: 'right', textAlignLast: 'right' }}>{head(t)} … {tail(t, 2)}</p>
                   <p className="mt-1 flex items-center gap-1 text-[11.5px] text-muted"><Icon name="tafsir" size={13} />{open === a ? 'إخفاء المعنى' : 'معنى الآية من التفسير الميسّر'}</p>
                 </button>
-                {open === a && <TafsirSnippet a={a} />}
+                {open === a && <TafsirSnippet s={p.s} a={a} />}
               </li>
             )
           })}
@@ -475,7 +661,7 @@ function ConnectPanel({ ayat, hafs, prog }: { ayat: string[]; hafs: boolean; pro
           {q < n - 1 ? (
             <>
               <p className="mb-2 text-[12.5px] text-muted">سؤال {toAr(q + 1)} من {toAr(n - 1)} · بعد قوله تعالى:</p>
-              <div className="mf-paper rounded-[18px] p-4"><p className={`mf-text ${hafs ? '' : 'tanzil'} text-[21px]`} style={{ lineHeight: 2 }}>… {tail(ayat[q], 4)} <span className="mf-num">{toAr(JOURNEY.from + q)}</span></p></div>
+              <div className="mf-paper rounded-[18px] p-4"><p className={`mf-text ${hafs ? '' : 'tanzil'} text-[21px]`} style={{ lineHeight: 2 }}>… {tail(ayat[q], 4)} <span className="mf-num">{toAr(p.from + q)}</span></p></div>
               <p className="mb-2 mt-4 text-[13px] font-semibold">بأيّ كلمات تبدأ الآية التالية؟</p>
               <div className="space-y-2">
                 {opts.map((o) => {
@@ -501,7 +687,7 @@ function ConnectPanel({ ayat, hafs, prog }: { ayat: string[]; hafs: boolean; pro
           <div className="mf-paper space-y-3 rounded-[22px] p-5">
             {ayat.map((_, i) => (
               <div key={i} className="flex items-center gap-3">
-                <span className="mf-num mf-text text-[22px]">{toAr(JOURNEY.from + i)}</span>
+                <span className="mf-num mf-text text-[22px]">{toAr(p.from + i)}</span>
                 <span className="h-px flex-1 border-b-2 border-dotted border-[var(--mf-frame-soft)]" />
                 <button type="button" onClick={() => setSelf((x) => ({ ...x, [i]: !x[i] }))} className={`press rounded-full px-3 py-1 text-[11.5px] ${self[i] ? 'bg-leaf/10 text-leaf' : 'bg-night/[.05] text-muted'}`}>{self[i] ? 'تذكّرتها' : 'تعثّرت'}</button>
               </div>
@@ -511,17 +697,28 @@ function ConnectPanel({ ayat, hafs, prog }: { ayat: string[]; hafs: boolean; pro
             <Icon name="mic" size={18} />تسجيل التلاوة · يتوفّر عند التنفيذ
           </button>
           <p className="mt-2 text-center text-[11.5px] text-muted">التقييم الذاتي لا يغيّر حالة الحفظ؛ الحفظ يُسجَّل لكل آية من «احفظ».</p>
+          {linked.length > 0 && (
+            <section className="mt-5 rounded-[22px] bg-sky/[.05] p-4 ring-1 ring-sky/20">
+              <p className="mb-2 flex items-center gap-1.5 text-[13.5px] font-semibold"><Icon name="copy" size={15} className="text-sky" />استحضر متشابهات هذا المقطع أثناء المراجعة</p>
+              <RevisionRecall pairs={linked} compact />
+            </section>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-function TafsirSnippet({ a }: { a: number }) {
+function TafsirSnippet({ s, a }: { s: number; a: number }) {
   const [t, setT] = useState<TafsirText | null | false>(null)
   useEffect(() => {
-    loadTafsir(16, JOURNEY.s, a).then(setT, () => setT(false))
-  }, [a])
+    let live = true
+    setT(null)
+    loadTafsir(16, s, a).then((x) => live && setT(x), () => live && setT(false))
+    return () => {
+      live = false
+    }
+  }, [s, a])
   return (
     <div className="mt-2 rounded-[16px] bg-[var(--mf-paper)] p-3 text-[13px] leading-[1.9] text-[var(--mf-ink)] ring-1 ring-[var(--mf-frame-soft)]">
       {t === null ? <div className="h-3 w-4/5 animate-pulse rounded-full bg-night/[.07]" /> : t === false ? 'تعذّر التحميل (يتطلب اتصالًا).' : t.paragraphs.map((p) => p.map((s) => s.t).join('')).join(' ')}

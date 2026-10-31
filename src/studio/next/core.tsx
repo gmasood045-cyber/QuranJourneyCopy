@@ -106,7 +106,6 @@ export const NAV: { id: ScreenId; icon: string; ar: string; dock?: boolean }[] =
   { id: 'mushaf', icon: 'book', ar: 'المصحف', dock: true },
   { id: 'ayah', icon: 'sparkle', ar: 'رحلة الحفظ', dock: true },
   { id: 'azkar', icon: 'sun', ar: 'أذكاري', dock: true },
-  { id: 'similar', icon: 'copy', ar: 'المتشابهات والروابط' },
   { id: 'recite', icon: 'mic', ar: 'التلاوة والتجويد' },
   { id: 'rewards', icon: 'gift', ar: 'المكافآت والإنجازات' },
   { id: 'library', icon: 'layers', ar: 'مكتبة إنجازاتي' },
@@ -155,7 +154,7 @@ export function Chrome({ children, bare = false, dock = true }: { children: Reac
                 </button>
               )
             })}
-            <button type="button" onClick={() => go('similar')} aria-label="المزيد" className={`press flex h-12 w-12 items-center justify-center rounded-full ${NAV.some((n) => !n.dock && n.id === active(nav.screen)) ? 'bg-night text-parchment' : 'text-muted hover:text-night'}`}>
+            <button type="button" onClick={() => go('recite')} aria-label="المزيد" className={`press flex h-12 w-12 items-center justify-center rounded-full ${NAV.some((n) => !n.dock && n.id === active(nav.screen)) ? 'bg-night text-parchment' : 'text-muted hover:text-night'}`}>
               <Icon name="more" size={21} />
             </button>
           </div>

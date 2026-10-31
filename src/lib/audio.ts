@@ -18,7 +18,7 @@ export async function blobToMono16k(blob: Blob): Promise<Float32Array> {
     const rendered = await off.startRendering()
     return rendered.getChannelData(0).slice()
   } finally {
-    void ctx.close()
+    ctx.close().catch(() => {})
   }
 }
 
@@ -52,19 +52,36 @@ export async function startRecording(): Promise<Recorder> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true },
   })
-  const rec = new MediaRecorder(stream)
+  let rec: MediaRecorder
+  let ctx: AudioContext
+  let analyser: AnalyserNode
+  try {
+    rec = new MediaRecorder(stream)
+    ctx = new AudioContext()
+    analyser = ctx.createAnalyser()
+    analyser.fftSize = 512
+    ctx.createMediaStreamSource(stream).connect(analyser)
+  } catch (e) {
+    // Never leave the microphone open when setup fails after permission was granted.
+    stream.getTracks().forEach((t) => t.stop())
+    throw e
+  }
   const chunks: Blob[] = []
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data)
-  const ctx = new AudioContext()
-  const analyser = ctx.createAnalyser()
-  analyser.fftSize = 512
-  ctx.createMediaStreamSource(stream).connect(analyser)
   const data = new Uint8Array(analyser.fftSize)
+  let released = false
   const release = () => {
+    if (released) return
+    released = true
     stream.getTracks().forEach((t) => t.stop())
-    void ctx.close()
+    ctx.close().catch(() => {})
   }
-  rec.start()
+  try {
+    rec.start()
+  } catch (e) {
+    release()
+    throw e
+  }
   return {
     level: () => {
       analyser.getByteTimeDomainData(data)
@@ -77,13 +94,29 @@ export async function startRecording(): Promise<Recorder> {
       if (rec.state !== 'inactive') rec.stop()
       release()
     },
+    // Always releases the microphone, and rejects (instead of hanging) if the recorder fails.
     stop: () =>
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
+        const done = () => resolve(new Blob(chunks, { type: rec.mimeType }))
+        if (rec.state === 'inactive') {
+          release()
+          return done()
+        }
         rec.onstop = () => {
           release()
-          resolve(new Blob(chunks, { type: rec.mimeType }))
+          done()
         }
-        rec.stop()
+        rec.onerror = () => {
+          rec.onstop = null
+          release()
+          reject(new Error('recorder error'))
+        }
+        try {
+          rec.stop()
+        } catch (e) {
+          release()
+          reject(e)
+        }
       }),
   }
 }

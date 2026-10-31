@@ -21,13 +21,14 @@ import { navTo } from '../mushaf/page'
 import type { MobileView } from '../mushaf/mobile'
 import type { Tone } from '../mushaf/desktop'
 import { PALETTES } from '../../lib/theme'
+import { SessionCtx, readOnlySession, useSessionState } from './session'
 
 type Page = ScreenId | 'themes' | 'system'
 const PAGES: { id: Page; n: string; en: string; ar: string; note: string }[] = [
   { id: 'home', n: '01', en: 'Unified home', ar: 'رحلتك اليوم', note: 'Three daily journeys (Quran · Azkar by local time · Tadabbur) as one calm trio, then at most four cards: today’s plan tasks, Azkar, an ayah to reflect on (real text, chosen by date) and recent achievements. Rings are computed from the demo plan log, not typed percentages.' },
   { id: 'mushaf', n: '02', en: 'Digital Mushaf', ar: 'المصحف الرقمي', note: 'Opens on a surah / juz index: 114 surah cards (Arabic and English name, meaning, ayah count, Makki/Madani, starting page) and 30 juz with their real start and end, sortable and searchable in Arabic or English. A card opens the approved Phase 1 reader at that exact ayah; its back button returns here. All 604 pages are navigable. Pages are text-rendered — verified KFGQPC Hafs text on Tanzil’s Madinah page ranges, not page images, so lines reflow. Surah names use Amiri (no licensed surah-name font in the project); no revelation-order tab, as the repo has no sourced data for it.' },
-  { id: 'ayah', n: '03', en: 'Memorization Journey', ar: 'رحلة الحفظ', note: 'Formerly “Ayah Journey”; same screen and flow. Vertical snap feed, one ayah per screen (Al-Mulk 1–5, real Hafs text and EveryAyah audio). Four connected experiences: Read & listen, Understand & reflect (verified Tafsir fetched verbatim with book and author, visually separate from the personal journal), Memorise (6 steps; only “أتقنتها” records an ayah as memorised) and Connect ayat (meaning chain, what-comes-next drill, blind recitation). Session intent: memorisation, reflection or both. Desktop keeps the experience in a persistent side panel.' },
-  { id: 'similar', n: '04', en: 'Quranic Similarities & Connections', ar: 'المتشابهات والروابط القرآنية', note: 'Textual similarity and thematic connections are separate lenses. No verified similarity dataset is bundled, so the curated list and the thematic lens show labelled empty states (0 pairs) and no invented examples. What works: a whole-Quran word search over the exact KFGQPC Hafs text (anywhere / beginning / ending, matched on the consonantal skeleton), side-by-side comparison with the differing words highlighted and a mechanical explanation, “open in Mushaf” for either verse, linking a pair to your memorisation (session only), a fill-the-different-word practice and a which-surah connection drill — both built only from pairs you linked.' },
+  { id: 'ayah', n: '03', en: 'Memorization Journey', ar: 'رحلة الحفظ', note: 'Passage-driven: “اختيار مقطع الحفظ” picks any surah and range (validated against the surah’s real ayah count, up to 20 ayat); Al-Mulk 1–5 is only the initial DEMO passage. Vertical snap feed of the exact Hafs text with explicit loading / error / retry, EveryAyah audio. Five connected experiences: Read & listen, Understand & reflect (verbatim Tafsir with book and author, separate from the personal journal), Memorise (6 steps; only “أتقنتها” records an ayah as memorised), Connect ayat, and “متشابهات هذا المقطع” — the primary home of Quranic Similarities, contextual to the active passage and current ayah, with its own “التمييز بين المتشابهات” progress that never counts as memorisation. One shared session drives Desktop, Mobile and Both (passage, current ayah, results, reflections, bookmarks, linked similarities); it lives in preview memory only.' },
+  { id: 'similar', n: '04', en: 'Similarities · extended text search', ar: 'البحث النصي الموسّع', note: 'Secondary reference view, opened from “متشابهات هذا المقطع” inside the Memorization Journey (no longer a navigation destination). It receives the active passage and its linked pairs, and its back button returns to the same passage and ayah. Textual similarity and thematic connections are separate lenses. No verified similarity dataset is bundled, so the curated list and the thematic lens show labelled empty states (0 pairs) and no invented examples. What works: a whole-Quran word search over the exact KFGQPC Hafs text (anywhere / beginning / ending, matched on the consonantal skeleton), side-by-side comparison with the differing words highlighted and a mechanical explanation, “open in Mushaf” for either verse, linking a pair to your memorisation (session only), a fill-the-different-word practice and a which-surah connection drill — both built only from pairs you linked to the passage. Everything here is labelled automatic textual matching, never verified mutashabihat; the full text loads only on the first explicit search, with retry on failure.' },
   { id: 'recite', n: '05', en: 'Recitation Correction & Tajweed', ar: 'تصحيح التلاوة والتجويد', note: 'Replaces the Recitation Journey mock with a guided flow: choose a surah and up to 10 ayat, read the exact text and listen to the reference reciter (EveryAyah), record with real microphone permission (lib/audio, same as the app), then analyse. Analysis runs only when the Muaalem engine reports online; otherwise the attempt is explicitly “not analysed”. The result layout (correct · needs practice · articulation · tajweed · repetition) renders only real engine fields, or an empty labelled template. Session history keeps automated and (optional, prototype) teacher review visually distinct.' },
   { id: 'rewards', n: '06', en: 'Rewards & Achievements', ar: 'المكافآت والإنجازات', note: 'Adult and children’s modes (the children’s mode uses the Kids tokens). Every badge is computed from the DEMO records with the stated rules: only confirmed mastered memorisation counts as memorisation; revision badges need completed revision tasks; reading, listening, Tafsir and reflection never count as memorisation (try it in “كيف تُحتسب المكافآت”); nothing is deducted, no streak penalties, no leaderboards. The Juz shelf stays in the Achievements Library; the children’s stars come from completed Kids lessons.' },
   { id: 'library', n: '07', en: 'Achievements Library', ar: 'مكتبة إنجازاتي', note: 'Isometric bookcase, six shelves × five Juz books. A book lights fully only when every ayah is recorded; in-progress spines fill to the true ratio; untouched books are ghost outlines that “appear” as you begin. No streaks, ranks or comparisons.' },
@@ -86,6 +87,8 @@ export default function NextPreview() {
   const [page, setPage] = useState<Page>(initial)
   const [nav, setNav] = useState<Nav>({ screen: initial === 'themes' || initial === 'system' ? 'home' : initial })
   const [mushaf, setMushaf] = useState<MushafState>(MUSHAF_DEFAULT)
+  // One memorisation session above both device frames (preview memory only).
+  const session = useSessionState()
   const mushafCtx = { s: mushaf, set: (p: Partial<MushafState>) => setMushaf((m) => ({ ...m, ...p })) }
   // The deep link also works while the preview is open (back / forward, edited URL).
   useEffect(() => {
@@ -103,13 +106,19 @@ export default function NextPreview() {
   const [mode, setMode] = useState<'light' | 'dark' | 'system'>('light')
   const [device, setDevice] = useState<'both' | Device>('both')
   const look: Look = { palette, dark: mode === 'dark' || (mode === 'system' && sys) }
-  const go = (s: ScreenId, param?: string) => (setNav({ screen: s, param }), setPage(s))
+  const go = (s: ScreenId, param?: string) => {
+    // Leaving the journey's hand-off chain (journey → Mushaf / extended search) forgets the way back.
+    if (s !== 'ayah' && s !== 'mushaf' && s !== 'similar' && session.s.away) session.setAway(null)
+    setNav({ screen: s, param })
+    setPage(s)
+  }
   useEffect(() => {
     document.title = 'Next generation · Design preview · Al-Quran Rafiqi'
   }, [])
   const info = PAGES.find((p) => p.id === page)!
 
   return (
+    <SessionCtx.Provider value={session}>
     <MushafCtx.Provider value={mushafCtx}>
     <div className="min-h-screen bg-[#f4f3ef] font-['Inter',system-ui,sans-serif] text-[#16181d]" dir="ltr">
       <header className="sticky top-0 z-40 border-b border-black/10 bg-[#f4f3ef]/90 backdrop-blur">
@@ -158,7 +167,7 @@ export default function NextPreview() {
           </div>
 
           {page === 'themes' ? (
-            <ThemeBoard />
+            <SessionCtx.Provider value={readOnlySession(session.s)}><ThemeBoard /></SessionCtx.Provider>
           ) : page === 'system' ? (
             <SystemPage look={look} />
           ) : (
@@ -174,6 +183,7 @@ export default function NextPreview() {
       </div>
     </div>
     </MushafCtx.Provider>
+    </SessionCtx.Provider>
   )
 }
 
@@ -285,6 +295,7 @@ function SystemPage({ look }: { look: Look }) {
     ['Honest progress', 'Every figure derives from demo records (ayah ranges, plan days). Memorisation is only recorded by the explicit result step, never by viewing or reading tafsir.'],
     ['Isometric use', 'Limited to Map, Library, Kids house and Week. Glow only marks live state and disappears with prefers-reduced-transparency. Pure SVG, no 3D library.'],
     ['Risk · density', 'The Memorization Journey desktop side panel is information-rich; implementation should default to one section expanded and lazy-load Tafsir.'],
+    ['Similarities integrity', 'Similarities live inside the active memorisation passage. Verified references and automatic text matches are separate sources; no verified dataset is bundled, so every passage shows “لا توجد متشابهات موثّقة لهذا المقطع حاليًا.” Similarity practice has its own progress and never counts as memorisation.'],
     ['Risk · map on mobile', 'The 30-station map is tall on phones (10 rows). The pinned detail sheet keeps context; implementation should auto-scroll to the in-progress station.'],
     ['Risk · Kids locks', 'Existing lessons have no locking, so the house shows completed / next / not-started rather than inventing locks. If locks are wanted, that is a product decision to approve.'],
     ['Accessibility', 'All isometric hotspots are focusable buttons with labels; RTL order is respected; touch targets ≥ 44 px; counters and steppers are real buttons. Contrast follows the existing palette (already AA/AAA for text).'],

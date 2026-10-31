@@ -8,7 +8,9 @@ import '../../mushaf/mushaf-preview.css'
 import { DesktopReader, type Tone } from '../../mushaf/desktop'
 import { MobileReader, type MobileView } from '../../mushaf/mobile'
 import { navTo, type Focus, type Go, type MushafNav } from '../../mushaf/page'
-import { Chrome, useDevice, useProto } from '../core'
+import { Chrome, Icon, toAr, useDevice, useProto } from '../core'
+import { useSession } from '../session'
+import { surah } from '../../../lib/quran'
 import { setReciteTarget } from './recite'
 import { MushafIndex } from './mushafIndex'
 
@@ -40,13 +42,16 @@ export function DigitalMushaf() {
   const open = (pg: number, focus?: Focus) => set({ nav: navTo(pg, focus), stage: 'reader', view: 'reading' })
   const recite = (rs: number, ra: number) => (setReciteTarget({ s: rs, a: ra }), goScreen('recite'))
 
-  if (s.stage === 'index') return <MushafIndex pg={s.nav.pg} onOpen={open} />
+  const ret = <ReturnToJourney />
+
+  if (s.stage === 'index') return <div className="relative h-full"><MushafIndex pg={s.nav.pg} onOpen={open} />{ret}</div>
 
   if (device === 'desktop')
     return (
       <Chrome dock={false}>
-        <div className="mp h-full" data-tone={s.tone}>
+        <div className="mp relative h-full" data-tone={s.tone}>
           <DesktopReader nav={s.nav} onGo={go} tone={s.tone} setTone={setTone} auto onBack={back} onRecite={recite} />
+          {ret}
         </div>
       </Chrome>
     )
@@ -54,6 +59,23 @@ export function DigitalMushaf() {
   return (
     <div className="mp absolute inset-0" data-tone={s.tone}>
       <MobileReader bare auto label="" pg={s.nav.pg} focus={s.nav.focus} view={s.view} tone={s.tone} setTone={setTone} onView={(view) => set({ view })} onGo={go} onBack={back} onRecite={recite} />
+      {ret}
+    </div>
+  )
+}
+
+/** Shown when the Mushaf was opened from the Memorization Journey: back to the same passage and ayah. */
+function ReturnToJourney() {
+  const ses = useSession()
+  const { go } = useProto()
+  if (!ses.s.away) return null
+  const { passage: p, cur } = ses.s
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-24 z-[65] flex justify-center px-4">
+      <button type="button" onClick={() => go('ayah')} className="press pointer-events-auto flex h-11 items-center gap-2 rounded-full bg-night px-4 text-[13px] font-semibold text-parchment shadow-[0_12px_30px_-10px_rgba(0,0,0,.5)]" data-return-journey>
+        <Icon name="back" size={16} className="rotate-180" />
+        العودة إلى رحلة الحفظ · {surah(p.s).ar} {toAr(cur)}
+      </button>
     </div>
   )
 }
